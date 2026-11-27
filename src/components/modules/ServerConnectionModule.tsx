@@ -517,8 +517,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
             <Globe className="h-3.5 w-3.5 text-cyan-400" />
             <span>
               {lang === 'ar'
-                ? 'فتح منفذي 443,80 + تفعيل www و Cloud DDNS + شهادة SSL تلقائية وطباعة النطاق'
-                : 'Open ports 443,80, enable www & Cloud DDNS, free SSL & print domain'}
+                ? 'فتح منفذي 80,443 + تفعيل www و Cloud DDNS وطباعة النطاق السحابي تلقائياً'
+                : 'Open ports 80,443, enable www & Cloud DDNS & print cloud domain'}
             </span>
           </label>
 

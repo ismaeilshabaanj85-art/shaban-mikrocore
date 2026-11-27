@@ -49,14 +49,14 @@ test('Auto-Rollback Safety Guard creates 60s scheduler and backup', () => {
   assert.equal(guard.includes('MikroCore_AutoRollback'), true);
 });
 
-test('One-Line Connector separates v7 REST SSL + ports 443,80 + www + auto-SSL/DDNS from v6 API', () => {
+test('One-Line Connector emits safe non-failing v7 script with port 80, Cloud DDNS, and separates v6 API', () => {
   const v7Conn = generateOneLineConnector({
     osVersion: 'v7',
     tenantUuid: 'tenant-123',
     apiUser: 'apiuser',
     apiPassword: 'secret',
     enableCloudDdns: true,
-    port: 443,
+    port: 80,
   });
   const v6Conn = generateOneLineConnector({
     osVersion: 'v6',
@@ -66,15 +66,11 @@ test('One-Line Connector separates v7 REST SSL + ports 443,80 + www + auto-SSL/D
     enableCloudDdns: false,
     port: 8728,
   });
-  assert.equal(v7Conn.includes('/ip firewall filter add chain=input protocol=tcp dst-port=443,80 action=accept place-before=0'), true);
-  assert.equal(v7Conn.includes('/ip service set www disabled=no port=80'), true);
-  assert.equal(v7Conn.includes('/ip cloud set ddns-enabled=yes'), true);
-  assert.equal(v7Conn.includes('/ip cloud force-update'), true);
-  assert.equal(v7Conn.includes('/certificate enable-ssl-certificate dns-name=$dns'), true);
-  assert.equal(v7Conn.includes('/ip service set www-ssl disabled=no port=443'), true);
-  assert.equal(v7Conn.includes('/ip service set api-ssl disabled=no'), true);
-  assert.equal(v7Conn.includes(':put ("CLOUD_DOMAIN=" . $dns)'), true);
-  assert.equal(v6Conn.includes('www-ssl'), false);
+  const expectedV7 =
+    '/ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept place-before=0 comment="Shaban MikroCore API Port"; /ip service set www disabled=no port=80; :do { /user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive } on-error={}; :do { /user add name="apiuser" password="secret" group=full comment="Tenant:tenant-123" } on-error={ /user set [find name="apiuser"] password="secret" group=full }; /ip cloud set ddns-enabled=yes update-time=yes; /ip cloud force-update; :delay 3s; :put ("CLOUD_DOMAIN=" . [/ip cloud get dns-name])';
+  assert.equal(v7Conn, expectedV7);
+  assert.equal(v7Conn.includes('enable-ssl-certificate'), false);
+  assert.equal(v6Conn.includes(':do { /user group add'), false);
   assert.equal(v6Conn.includes('/ip service set api disabled=no port=8728'), true);
 });
 

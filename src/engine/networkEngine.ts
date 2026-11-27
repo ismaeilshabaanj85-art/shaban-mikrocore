@@ -173,30 +173,24 @@ export function generateOneLineConnector(params: {
   const safeTenant = sanitizeCliToken(params.tenantUuid, 'tenant');
   const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 80 : 8728)));
 
-  const userCmd = `/user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive; /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
-
   if (params.osVersion === 'v7') {
-    const dstPorts = port === 443 || port === 80 ? '443,80' : `${port},443,80`;
-    const sslPort = port === 80 ? 443 : port;
-    const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${dstPorts} action=accept place-before=0 comment="Shaban MikroCore API Port"`;
-    const wwwCmd = `/ip service set www disabled=no port=80`;
+    const dstPorts = port === 80 || port === 443 ? '80,443' : `80,443,${port}`;
+    const wwwPort = port === 443 ? 80 : port;
+    const baseCommands = [
+      `/ip firewall filter add chain=input protocol=tcp dst-port=${dstPorts} action=accept place-before=0 comment="Shaban MikroCore API Port"`,
+      `/ip service set www disabled=no port=${wwwPort}`,
+      `:do { /user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive } on-error={}`,
+      `:do { /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}" } on-error={ /user set [find name="${safeUser}"] password="${safePass}" group=full }`,
+    ];
     if (params.enableCloudDdns) {
-      return [
-        userCmd,
-        fwCmd,
-        wwwCmd,
+      baseCommands.push(
         `/ip cloud set ddns-enabled=yes update-time=yes`,
         `/ip cloud force-update`,
         `:delay 3s`,
-        `:local dns [/ip cloud get dns-name]`,
-        `/certificate enable-ssl-certificate dns-name=$dns`,
-        `/ip service set www-ssl disabled=no port=${sslPort}`,
-        `/ip service set api-ssl disabled=no`,
-        `:put ("CLOUD_DOMAIN=" . $dns)`,
-      ].join('; ');
+        `:put ("CLOUD_DOMAIN=" . [/ip cloud get dns-name])`
+      );
     }
-    const localSslCmd = `/certificate add name=mikrocore-ca common-name=mikrocore.local key-usage=key-cert-sign,crl-sign; /certificate sign mikrocore-ca; /certificate add name=mikrocore-srv common-name=mikrocore.local; /certificate sign mikrocore-srv ca=mikrocore-ca; /ip service set www-ssl disabled=no certificate=mikrocore-srv port=${sslPort}; /ip service set api-ssl disabled=no certificate=mikrocore-srv`;
-    return `${userCmd}; ${fwCmd}; ${wwwCmd}; ${localSslCmd}`;
+    return baseCommands.join('; ');
   }
 
   // RouterOS v6 strictly separated syntax (no rest-api policy)
