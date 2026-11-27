@@ -47,7 +47,7 @@ test('Auto-Rollback Safety Guard creates 60s scheduler and backup', () => {
   assert.equal(guard.includes('MikroCore_AutoRollback'), true);
 });
 
-test('One-Line Connector separates v7 REST SSL from v6 API', () => {
+test('One-Line Connector separates v7 REST SSL + auto-SSL/DDNS/firewall from v6 API', () => {
   const v7Conn = generateOneLineConnector({
     osVersion: 'v7',
     tenantUuid: 'tenant-123',
@@ -64,8 +64,13 @@ test('One-Line Connector separates v7 REST SSL from v6 API', () => {
     enableCloudDdns: false,
     port: 8728,
   });
-  assert.equal(v7Conn.includes('www-ssl'), true);
+  assert.equal(v7Conn.includes('/ip firewall filter add chain=input protocol=tcp dst-port=443 action=accept place-before=0'), true);
   assert.equal(v7Conn.includes('/ip cloud set ddns-enabled=yes'), true);
+  assert.equal(v7Conn.includes('/ip cloud force-update'), true);
+  assert.equal(v7Conn.includes('/certificate enable-ssl-certificate dns-name=$dns'), true);
+  assert.equal(v7Conn.includes('/ip service set www-ssl disabled=no port=443'), true);
+  assert.equal(v7Conn.includes('/ip service set api-ssl disabled=no'), true);
+  assert.equal(v7Conn.includes(':put ("CLOUD_DOMAIN=" . $dns)'), true);
   assert.equal(v6Conn.includes('www-ssl'), false);
   assert.equal(v6Conn.includes('/ip service set api disabled=no port=8728'), true);
 });

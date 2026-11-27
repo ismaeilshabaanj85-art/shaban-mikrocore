@@ -25,6 +25,7 @@ import {
   sanitizeInput,
   sha256Hex,
 } from './security';
+import { cloudFetchTenant, validateTenantLoginState } from './firebaseCloud';
 
 const CUSTOMERS_KEY = 'mikrocore_sys_customers_v1';
 const AUDIT_KEY = 'mikrocore_sys_audit_v1';
@@ -183,44 +184,78 @@ export async function authenticateUser(
     return { ok: false, reason: 'invalid' };
   }
 
-  const customers = loadCustomers();
-  const idx = customers.findIndex((c) => c.username.toLowerCase() === username);
-  if (idx === -1) {
-    appendAuditLog({
-      actor: username || 'unknown',
-      tenantUuid: 'system',
-      action: 'FAILED_LOGIN',
-      severity: 'warning',
-      details: 'Unknown username attempted login',
-    });
-    return { ok: false, reason: 'invalid' };
+  const localCustomers = loadCustomers();
+  const cloudRes = await cloudFetchTenant(username);
+
+  let account: CustomerAccount | null = null;
+  if (cloudRes.ok) {
+    if (!cloudRes.tenant) {
+      const pruned = localCustomers.filter((c) => c.username.toLowerCase() !== username);
+      if (pruned.length !== localCustomers.length) {
+        saveCustomers(pruned);
+      }
+      appendAuditLog({
+        actor: username || 'unknown',
+        tenantUuid: 'system',
+        action: 'FAILED_LOGIN',
+        severity: 'warning',
+        details: 'Unknown username attempted cloud login',
+      });
+      return { ok: false, reason: 'invalid' };
+    }
+    account = cloudRes.tenant;
+  } else {
+    account = localCustomers.find((c) => c.username.toLowerCase() === username) || null;
+    if (!account) {
+      appendAuditLog({
+        actor: username || 'unknown',
+        tenantUuid: 'system',
+        action: 'FAILED_LOGIN',
+        severity: 'warning',
+        details: 'Unknown username attempted login',
+      });
+      return { ok: false, reason: 'invalid' };
+    }
   }
 
-  const account = customers[idx];
-  if (!constantTimeEqual(passwordHash, account.passwordHash)) {
-    appendAuditLog({
-      actor: account.username,
-      tenantUuid: account.tenantUuid,
-      action: 'FAILED_LOGIN_BAD_PASS',
-      severity: 'warning',
-      details: 'Incorrect password entered',
-    });
-    return { ok: false, reason: 'invalid' };
-  }
+  const upsertLocalCustomer = (entry: CustomerAccount) => {
+    const idx = localCustomers.findIndex(
+      (c) => c.username.toLowerCase() === entry.username.toLowerCase()
+    );
+    const nextList = [...localCustomers];
+    if (idx === -1) {
+      nextList.unshift(entry);
+    } else {
+      nextList[idx] = entry;
+    }
+    saveCustomers(nextList);
+  };
 
-  if (account.status === 'suspended') {
-    appendAuditLog({
-      actor: account.username,
-      tenantUuid: account.tenantUuid,
-      action: 'LOGIN_BLOCKED_SUSPENDED',
-      severity: 'warning',
-      details: 'Suspended account attempted access',
-    });
-    return { ok: false, reason: 'suspended' };
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-  if (account.expiryDate && account.expiryDate < today) {
+  const validation = validateTenantLoginState(account, passwordHash);
+  if (!validation.ok) {
+    if (validation.reason === 'invalid') {
+      appendAuditLog({
+        actor: account.username,
+        tenantUuid: account.tenantUuid,
+        action: 'FAILED_LOGIN_BAD_PASS',
+        severity: 'warning',
+        details: 'Incorrect password entered',
+      });
+      return { ok: false, reason: 'invalid' };
+    }
+    if (cloudRes.ok) {
+      upsertLocalCustomer(account);
+    }
+    if (validation.reason === 'suspended') {
+      appendAuditLog({
+        actor: account.username,
+        tenantUuid: account.tenantUuid,
+        action: 'LOGIN_BLOCKED_SUSPENDED',
+        severity: 'warning',
+        details: 'Suspended account attempted access',
+      });
+      return { ok: false, reason: 'suspended' };
+    }
     appendAuditLog({
       actor: account.username,
       tenantUuid: account.tenantUuid,
@@ -231,26 +266,29 @@ export async function authenticateUser(
     return { ok: false, reason: 'expired' };
   }
 
-  customers[idx] = { ...account, lastLoginAt: new Date().toISOString() };
-  saveCustomers(customers);
+  const syncedAccount: CustomerAccount = {
+    ...account,
+    lastLoginAt: new Date().toISOString(),
+  };
+  upsertLocalCustomer(syncedAccount);
 
   appendAuditLog({
-    actor: account.username,
-    tenantUuid: account.tenantUuid,
+    actor: syncedAccount.username,
+    tenantUuid: syncedAccount.tenantUuid,
     action: 'TENANT_LOGIN',
     severity: 'info',
-    details: `Tenant ${account.customerName} signed in`,
+    details: `Tenant ${syncedAccount.customerName} signed in (${cloudRes.ok ? 'cloud' : 'offline cache'})`,
   });
 
   return {
     ok: true,
     user: {
       role: 'customer',
-      username: account.username,
-      displayName: account.customerName,
-      tenantUuid: account.tenantUuid,
-      maxRouters: account.maxRouters,
-      expiryDate: account.expiryDate,
+      username: syncedAccount.username,
+      displayName: syncedAccount.customerName,
+      tenantUuid: syncedAccount.tenantUuid,
+      maxRouters: syncedAccount.maxRouters,
+      expiryDate: syncedAccount.expiryDate,
     },
   };
 }

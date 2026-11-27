@@ -1,10 +1,14 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
+  CalendarPlus,
+  Cloud,
+  CloudOff,
   Download,
   Edit3,
   MessageCircle,
   Plus,
+  RefreshCw,
   Shield,
   Trash2,
   Upload,
@@ -20,6 +24,12 @@ import {
 } from '../types/mikrocore';
 import { useT } from '../i18n/translations';
 import { generateUUID, sanitizeInput, sha256Hex } from '../utils/security';
+import {
+  cloudDeleteTenant,
+  cloudFetchAllTenants,
+  cloudPatchTenant,
+  cloudPutTenant,
+} from '../utils/firebaseCloud';
 import {
   appendAuditLog,
   exportFullSystemBackup,
@@ -55,6 +65,51 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
     return d.toISOString().slice(0, 10);
   });
   const [statusMsg, setStatusMsg] = useState('');
+  const [cloudState, setCloudState] = useState<'syncing' | 'synced' | 'offline'>('syncing');
+
+  const syncFromCloud = useCallback(async (showFeedback = false) => {
+    setCloudState('syncing');
+    const res = await cloudFetchAllTenants();
+    if (res.ok) {
+      saveCustomers(res.tenants);
+      setCustomers(res.tenants);
+      setCloudState('synced');
+      if (showFeedback) {
+        setStatusMsg(
+          lang === 'ar'
+            ? `تمت مزامنة ${res.tenants.length} حساب من سحابة Firebase بنجاح.`
+            : `Synced ${res.tenants.length} tenant accounts from Firebase Cloud.`
+        );
+      }
+    } else {
+      setCloudState('offline');
+      if (showFeedback) {
+        setStatusMsg(
+          lang === 'ar'
+            ? 'تعذر الوصول إلى السحابة حالياً — يتم استخدام النسخة المحلية.'
+            : 'Cloud unreachable — using local backup cache.'
+        );
+      }
+    }
+  }, [lang]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const res = await cloudFetchAllTenants();
+      if (!active) return;
+      if (res.ok) {
+        saveCustomers(res.tenants);
+        setCustomers(res.tenants);
+        setCloudState('synced');
+      } else {
+        setCloudState('offline');
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSaveSubscription = (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,11 +163,13 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
     }
 
     if (editingId) {
+      const prevAccount = customers.find((c) => c.id === editingId);
+      let updatedAccount: CustomerAccount | null = null;
       const updated = await Promise.all(
         customers.map(async (c) => {
           if (c.id !== editingId) return c;
           const nextHash = password ? await sha256Hex(password) : c.passwordHash;
-          return {
+          updatedAccount = {
             ...c,
             username: cleanUser,
             customerName: cleanName,
@@ -120,21 +177,39 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
             maxRouters: Math.max(1, Math.min(500, Number(maxRouters) || 1)),
             expiryDate,
           };
+          return updatedAccount;
         })
       );
       saveCustomers(updated);
       setCustomers(updated);
+
+      let cloudOk = true;
+      if (updatedAccount) {
+        if (prevAccount && prevAccount.username.toLowerCase() !== cleanUser) {
+          await cloudDeleteTenant(prevAccount.username);
+        }
+        const cloudRes = await cloudPutTenant(updatedAccount);
+        cloudOk = cloudRes.ok;
+        setCloudState(cloudOk ? 'synced' : 'offline');
+      }
+
       setLogs(
         appendAuditLog({
           actor: 'ismaeil',
           tenantUuid: 'admin',
           action: 'CUSTOMER_UPDATED',
           severity: 'info',
-          details: `Updated tenant account ${cleanUser}`,
+          details: `Updated tenant account ${cleanUser} (${cloudOk ? 'cloud synced' : 'local cache'})`,
         })
       );
       setStatusMsg(
-        lang === 'ar' ? 'تم تحديث بيانات العميل بنجاح.' : 'Customer account updated.'
+        cloudOk
+          ? lang === 'ar'
+            ? 'تم تحديث بيانات العميل ومزامنتها مع سحابة Firebase بنجاح.'
+            : 'Customer account updated and synced to Firebase Cloud.'
+          : lang === 'ar'
+          ? 'تم التحديث محلياً (تعذر الاتصال بالسحابة حالياً).'
+          : 'Updated locally (cloud unreachable).'
       );
       resetForm();
       return;
@@ -163,24 +238,64 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
     const nextList = [newAccount, ...customers];
     saveCustomers(nextList);
     setCustomers(nextList);
+
+    const cloudRes = await cloudPutTenant(newAccount);
+    setCloudState(cloudRes.ok ? 'synced' : 'offline');
+
     setLogs(
       appendAuditLog({
         actor: 'ismaeil',
         tenantUuid: newAccount.tenantUuid,
         action: 'CUSTOMER_CREATED',
         severity: 'info',
-        details: `Created tenant ${cleanName} (${cleanUser})`,
+        details: `Created tenant ${cleanName} (${cleanUser}) · ${cloudRes.ok ? 'cloud synced' : 'local cache'}`,
       })
     );
     setStatusMsg(
-      lang === 'ar'
-        ? `تم إنشاء حساب ${cleanName} بمعرّف عزل فريد.`
-        : `Created tenant account ${cleanName} with isolated UUID.`
+      cloudRes.ok
+        ? lang === 'ar'
+          ? `تم إنشاء حساب ${cleanName} ومزامنته مع سحابة Firebase فوراً.`
+          : `Created ${cleanName} and synced immediately to Firebase Cloud.`
+        : lang === 'ar'
+        ? `تم إنشاء حساب ${cleanName} محلياً (السحابة غير متاحة حالياً).`
+        : `Created ${cleanName} locally (cloud offline).`
     );
     resetForm();
   };
 
-  const toggleStatus = (account: CustomerAccount) => {
+  const renewThirtyDays = async (account: CustomerAccount) => {
+    const todayYmd = new Date().toISOString().slice(0, 10);
+    const baseYmd = account.expiryDate && account.expiryDate > todayYmd ? account.expiryDate : todayYmd;
+    const baseDate = new Date(`${baseYmd}T00:00:00Z`);
+    baseDate.setUTCDate(baseDate.getUTCDate() + 30);
+    const nextExpiry = baseDate.toISOString().slice(0, 10);
+
+    const nextList = customers.map((c) =>
+      c.id === account.id ? { ...c, expiryDate: nextExpiry } : c
+    );
+    saveCustomers(nextList);
+    setCustomers(nextList);
+
+    const cloudRes = await cloudPatchTenant(account.username, { expiresAt: nextExpiry });
+    setCloudState(cloudRes.ok ? 'synced' : 'offline');
+
+    setLogs(
+      appendAuditLog({
+        actor: 'ismaeil',
+        tenantUuid: account.tenantUuid,
+        action: 'CUSTOMER_RENEWED_30D',
+        severity: 'info',
+        details: `${account.username} extended +30d -> ${nextExpiry} (${cloudRes.ok ? 'cloud synced' : 'local'})`,
+      })
+    );
+    setStatusMsg(
+      lang === 'ar'
+        ? `تم تمديد اشتراك ${account.customerName} (+30 يوماً) حتى ${nextExpiry}.`
+        : `Renewed ${account.customerName} (+30 days) until ${nextExpiry}.`
+    );
+  };
+
+  const toggleStatus = async (account: CustomerAccount) => {
     const nextStatus: 'active' | 'suspended' =
       account.status === 'active' ? 'suspended' : 'active';
     const nextList = customers.map((c) =>
@@ -188,28 +303,38 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
     );
     saveCustomers(nextList);
     setCustomers(nextList);
+
+    const cloudRes = await cloudPatchTenant(account.username, {
+      isActive: nextStatus === 'active',
+    });
+    setCloudState(cloudRes.ok ? 'synced' : 'offline');
+
     setLogs(
       appendAuditLog({
         actor: 'ismaeil',
         tenantUuid: account.tenantUuid,
         action: nextStatus === 'active' ? 'CUSTOMER_ACTIVATED' : 'CUSTOMER_SUSPENDED',
         severity: nextStatus === 'active' ? 'info' : 'warning',
-        details: `${account.username} -> ${nextStatus}`,
+        details: `${account.username} -> ${nextStatus} (${cloudRes.ok ? 'cloud synced' : 'local'})`,
       })
     );
   };
 
-  const deleteCustomer = (account: CustomerAccount) => {
+  const deleteCustomer = async (account: CustomerAccount) => {
     const nextList = customers.filter((c) => c.id !== account.id);
     saveCustomers(nextList);
     setCustomers(nextList);
+
+    const cloudRes = await cloudDeleteTenant(account.username);
+    setCloudState(cloudRes.ok ? 'synced' : 'offline');
+
     setLogs(
       appendAuditLog({
         actor: 'ismaeil',
         tenantUuid: account.tenantUuid,
         action: 'CUSTOMER_DELETED',
         severity: 'critical',
-        details: `Removed tenant ${account.username}`,
+        details: `Removed tenant ${account.username} (${cloudRes.ok ? 'cloud synced' : 'local'})`,
       })
     );
   };
@@ -279,7 +404,46 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold ${
+              cloudState === 'synced'
+                ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
+                : cloudState === 'syncing'
+                ? 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200'
+                : 'border-amber-500/35 bg-amber-500/10 text-amber-200'
+            }`}
+          >
+            {cloudState === 'offline' ? (
+              <CloudOff className="h-3.5 w-3.5" />
+            ) : (
+              <Cloud className="h-3.5 w-3.5" />
+            )}
+            <span>
+              {cloudState === 'synced'
+                ? lang === 'ar'
+                  ? 'Firebase متزامن'
+                  : 'Firebase Synced'
+                : cloudState === 'syncing'
+                ? lang === 'ar'
+                  ? 'جارٍ المزامنة...'
+                  : 'Syncing...'
+                : lang === 'ar'
+                ? 'نسخة محلية'
+                : 'Local Backup'}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => syncFromCloud(true)}
+            disabled={cloudState === 'syncing'}
+            className="flex items-center gap-1.5 rounded-xl border border-indigo-500/35 bg-indigo-500/15 px-3.5 py-2 text-xs font-bold text-indigo-200 hover:bg-indigo-500/25 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${cloudState === 'syncing' ? 'animate-spin' : ''}`} />
+            <span>{lang === 'ar' ? 'مزامنة السحابة' : 'Sync Cloud'}</span>
+          </button>
+
           <button
             type="button"
             onClick={handleExportSystem}
@@ -550,6 +714,16 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => renewThirtyDays(c)}
+                          className="flex items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
+                          title={lang === 'ar' ? 'تمديد الاشتراك +30 يوماً' : 'Extend +30 Days'}
+                          aria-label={`Renew 30d ${c.username}`}
+                        >
+                          <CalendarPlus className="h-3.5 w-3.5" />
+                          <span>+30{lang === 'ar' ? 'ي' : 'd'}</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => toggleStatus(c)}

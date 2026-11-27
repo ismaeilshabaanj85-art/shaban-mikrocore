@@ -67,7 +67,7 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
   const [apiUser, setApiUser] = useState(activeRouter.apiUser);
   const [apiPassword, setApiPassword] = useState(activeRouter.apiPassword || 'MikroCore@2026');
   const [enableCloudDdns, setEnableCloudDdns] = useState(
-    activeRouter.connectionMethod === 'cloud_ddns'
+    activeRouter.osVersion === 'v7' || activeRouter.connectionMethod === 'cloud_ddns'
   );
 
   const syncFormToRouter = (r: RouterProfile) => {
@@ -79,7 +79,7 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
     setPort(r.port);
     setApiUser(r.apiUser);
     setApiPassword(r.apiPassword || 'MikroCore@2026');
-    setEnableCloudDdns(r.connectionMethod === 'cloud_ddns');
+    setEnableCloudDdns(r.osVersion === 'v7' || r.connectionMethod === 'cloud_ddns');
     setTestResult(null);
   };
 
@@ -515,8 +515,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
             <Globe className="h-3.5 w-3.5 text-cyan-400" />
             <span>
               {lang === 'ar'
-                ? 'تضمين تفعيل MikroTik Cloud DDNS تلقائياً'
-                : 'Auto-enable MikroTik Cloud DDNS in connector script'}
+                ? 'تفعيل Cloud DDNS + فتح البورت 443 + شهادة SSL تلقائية وطباعة النطاق'
+                : 'Auto-open Port 443, Cloud DDNS, free SSL & print domain'}
             </span>
           </label>
 

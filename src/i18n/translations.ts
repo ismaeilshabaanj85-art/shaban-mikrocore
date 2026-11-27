@@ -27,8 +27,8 @@ export const TRANSLATIONS = {
     lockoutMessage: 'تم قفل الدخول مؤقتاً بسبب تكرار المحاولات الخاطئة. انتظر:',
     seconds: 'ثانية',
     errInvalidCreds: 'بيانات الدخول غير صحيحة.',
-    errSuspended: 'هذا الحساب موقوف حالياً. تواصل مع الإدارة.',
-    errExpired: 'انتهت صلاحية الاشتراك. يرجى التجديد.',
+    errSuspended: 'هذا الحساب موقوف حالياً. يرجى التواصل مع المالك إسماعيل شعبان لتفعيل أو تجديد الاشتراك.',
+    errExpired: 'انتهت صلاحية الاشتراك. يرجى التواصل مع المالك إسماعيل شعبان لتجديد الاشتراك.',
     attemptsLeft: 'المحاولات المتبقية:',
     // Navigation Modules 1 - 14
     navNoc: 'لوحة القيادة الحية',
@@ -89,8 +89,8 @@ export const TRANSLATIONS = {
     lockoutMessage: 'Login temporarily locked due to failed attempts. Wait:',
     seconds: 'sec',
     errInvalidCreds: 'Invalid username or password.',
-    errSuspended: 'Account is currently suspended. Contact administration.',
-    errExpired: 'Subscription expired. Please renew your plan.',
+    errSuspended: 'Account is currently suspended. Please contact Ismaeil Shaban to activate or renew your subscription.',
+    errExpired: 'Subscription expired. Please contact Ismaeil Shaban to renew your subscription.',
     attemptsLeft: 'Attempts remaining:',
     // Navigation Modules 1 - 14
     navNoc: 'Live NOC',
