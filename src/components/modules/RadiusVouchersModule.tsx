@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Clock,
   Layers,
+  Play,
   Plus,
   Printer,
   Search,
@@ -21,7 +22,9 @@ import {
   generateVoucherBatch,
   generateVoucherBatchRsc,
 } from '../../engine/networkEngine';
+import { cloudSendAndAwaitRouterCommand } from '../../utils/firebaseCloud';
 import { generateUUID, sanitizeInput } from '../../utils/security';
+import { loadSession } from '../../utils/storage';
 import { CodeTerminalBox } from '../CodeTerminalBox';
 import { VoucherPrintStudio } from './VoucherPrintStudio';
 
@@ -29,6 +32,7 @@ interface RadiusVouchersModuleProps {
   lang: Language;
   mode: AppMode;
   activeRouter: RouterProfile;
+  tenantUuid?: string;
   customProfiles: SpeedProfile[];
   onSaveCustomProfiles: (profiles: SpeedProfile[]) => void;
   vouchers: GeneratedVoucher[];
@@ -40,6 +44,7 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
   lang,
   mode,
   activeRouter,
+  tenantUuid,
   customProfiles,
   onSaveCustomProfiles,
   vouchers,
@@ -72,6 +77,8 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
   const [durSeconds, setDurSeconds] = useState(0);
   const [newShared, setNewShared] = useState(2);
   const [newPrice, setNewPrice] = useState(12);
+  const [pushingRemote, setPushingRemote] = useState(false);
+  const [remoteNotice, setRemoteNotice] = useState<{ ok: boolean; message: string } | null>(null);
 
   const activeProfile =
     allProfiles.find((p) => p.id === selectedProfileId) || allProfiles[0];
@@ -144,6 +151,57 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
     () => generateSpeedProfileScript(activeProfile, activeRouter.osVersion),
     [activeProfile, activeRouter.osVersion]
   );
+
+  const handlePushScriptToRouter = async (scriptToSend: string, labelAr: string, labelEn: string) => {
+    const effectiveTenant =
+      tenantUuid || loadSession()?.tenantUuid || '00000000-0000-4000-8000-000000000001';
+    setPushingRemote(true);
+    setRemoteNotice({
+      ok: true,
+      message:
+        lang === 'ar'
+          ? `جارٍ إرسال ${labelAr} إلى الراوتر ${activeRouter.name} عبر السحابة...`
+          : `Pushing ${labelEn} to ${activeRouter.name} via Firebase Cloud...`,
+    });
+
+    const res = await cloudSendAndAwaitRouterCommand(
+      effectiveTenant,
+      activeRouter.id,
+      scriptToSend,
+      () => {
+        setRemoteNotice({
+          ok: true,
+          message:
+            lang === 'ar'
+              ? `تم رفع ${labelAr} إلى قائمة التنفيذ السحابية — بانتظار سحب الراوتر وتنفيذه...`
+              : `${labelEn} queued in Firebase — waiting for router agent to execute...`,
+        });
+      }
+    );
+
+    setPushingRemote(false);
+    if (!res.ok) {
+      setRemoteNotice({
+        ok: false,
+        message:
+          lang === 'ar'
+            ? `تعذر الإرسال إلى السحابة (${res.error || 'خطأ شبكة'}).`
+            : `Failed to push to cloud (${res.error || 'network error'}).`,
+      });
+      return;
+    }
+
+    setRemoteNotice({
+      ok: true,
+      message: res.executed
+        ? lang === 'ar'
+          ? `تم سحب ${labelAr} وتنفيذها على الراوتر ${activeRouter.name} بنجاح! ✅`
+          : `${labelEn} pulled and executed on ${activeRouter.name} successfully! ✅`
+        : lang === 'ar'
+        ? `تم وضع ${labelAr} في قائمة التنفيذ السحابية — سينفذها الراوتر فور نبضة الوكيل القادمة.`
+        : `${labelEn} queued in Firebase — router will execute on next agent heartbeat.`,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -358,7 +416,7 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Search className="h-3.5 w-3.5 text-slate-400 absolute top-2.5 start-3" />
                   <input
@@ -370,17 +428,54 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
                   />
                 </div>
                 {vouchers.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => onSaveVouchers([])}
-                    className="flex items-center gap-1 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/20 cursor-pointer"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span>{lang === 'ar' ? 'مسح الكل' : 'Clear'}</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      disabled={pushingRemote}
+                      onClick={() =>
+                        handlePushScriptToRouter(
+                          batchRsc,
+                          'البطاقات',
+                          'voucher batch'
+                        )
+                      }
+                      className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-3.5 py-1.5 text-xs font-bold text-slate-950 transition hover:brightness-110 disabled:opacity-60 cursor-pointer"
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                      <span>
+                        {pushingRemote
+                          ? lang === 'ar'
+                            ? 'جارٍ الإرسال...'
+                            : 'Pushing...'
+                          : lang === 'ar'
+                          ? 'إرسال وتنفيذ مباشر على الراوتر 🚀'
+                          : 'Push & Execute on Router 🚀'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onSaveVouchers([])}
+                      className="flex items-center gap-1 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{lang === 'ar' ? 'مسح الكل' : 'Clear'}</span>
+                    </button>
+                  </>
                 )}
               </div>
             </div>
+
+            {remoteNotice && (
+              <div
+                className={`border-b px-4 py-2.5 text-xs font-semibold ${
+                  remoteNotice.ok
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                }`}
+              >
+                {remoteNotice.message}
+              </div>
+            )}
 
             {filteredVouchers.length === 0 ? (
               <p className="p-8 text-center text-xs text-slate-400">
@@ -442,6 +537,7 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
               lang={lang}
               mode={mode}
               activeRouter={activeRouter}
+              tenantUuid={tenantUuid}
               onSaveToVault={onSaveToVault}
             />
           )}
@@ -579,7 +675,26 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
                 />
               </div>
             </div>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={pushingRemote}
+                onClick={() =>
+                  handlePushScriptToRouter(
+                    profileScript,
+                    `باقة ${activeProfile.name}`,
+                    `profile ${activeProfile.name}`
+                  )
+                }
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-400/45 bg-emerald-500/15 px-4 py-2.5 text-xs font-bold text-emerald-200 transition hover:bg-emerald-500/25 disabled:opacity-60 cursor-pointer"
+              >
+                <Play className="h-3.5 w-3.5" />
+                <span>
+                  {lang === 'ar'
+                    ? 'إرسال وتنفيذ مباشر على الراوتر 🚀'
+                    : 'Push & Execute on Router 🚀'}
+                </span>
+              </button>
               <button
                 type="submit"
                 className="rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-5 py-2.5 text-xs font-bold text-slate-950 cursor-pointer"
@@ -587,6 +702,17 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
                 {lang === 'ar' ? 'حفظ الباقة المخصصة' : 'Save Custom Profile'}
               </button>
             </div>
+            {remoteNotice && (
+              <div
+                className={`rounded-xl border px-4 py-2.5 text-xs font-semibold ${
+                  remoteNotice.ok
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                }`}
+              >
+                {remoteNotice.message}
+              </div>
+            )}
           </form>
 
           <CodeTerminalBox
@@ -600,6 +726,7 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
             lang={lang}
             mode={mode}
             activeRouter={activeRouter}
+            tenantUuid={tenantUuid}
             onSaveToVault={onSaveToVault}
           />
         </div>

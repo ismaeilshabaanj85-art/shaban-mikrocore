@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppMode,
   BackupVaultItem,
@@ -18,6 +18,10 @@ import {
   TowerNode,
 } from './types/mikrocore';
 import { generateUUID } from './utils/security';
+import {
+  RouterCloudTelemetry,
+  cloudFetchRouterTelemetry,
+} from './utils/firebaseCloud';
 import {
   getDefaultPortalConfig,
   getDefaultSandboxRouter,
@@ -81,6 +85,8 @@ export default function App() {
   const [vaultOpen, setVaultOpen] = useState(false);
   const [pendingSandboxScript, setPendingSandboxScript] = useState('');
   const [promoteNotice, setPromoteNotice] = useState('');
+  const [liveTelemetry, setLiveTelemetry] = useState<RouterCloudTelemetry | null>(null);
+  const userForcedSandboxRef = useRef(false);
 
   // Tenant-isolated state (Part 1)
   const [routers, setRouters] = useState<RouterProfile[]>(() =>
@@ -177,12 +183,83 @@ export default function App() {
     setLang((prev) => (prev === 'ar' ? 'en' : 'ar'));
   };
 
+  const handleChangeMode = (nextMode: AppMode) => {
+    userForcedSandboxRef.current = nextMode === 'sandbox';
+    setMode(nextMode);
+  };
+
   const activeRouter = routers.find((r) => r.id === activeRouterId) || routers[0];
 
-  const handleSaveRouters = (nextRouters: RouterProfile[]) => {
-    setRouters(nextRouters);
-    if (user) saveTenantRouters(user.tenantUuid, nextRouters);
-  };
+  const handleSaveRouters = useCallback(
+    (nextRouters: RouterProfile[]) => {
+      setRouters(nextRouters);
+      if (user) saveTenantRouters(user.tenantUuid, nextRouters);
+    },
+    [user]
+  );
+
+  // Poll Firebase Cloud Agent telemetry for the active router when viewing NOC/Connection or in Live mode
+  useEffect(() => {
+    if (!user || !activeRouter) return;
+    if (activeModule !== 'noc' && activeModule !== 'connection' && mode !== 'live') return;
+
+    let cancelled = false;
+
+    const pollTelemetry = async () => {
+      const res = await cloudFetchRouterTelemetry(user.tenantUuid, activeRouter.id);
+      if (cancelled || !res.ok) return;
+
+      if (res.telemetry && res.isFresh) {
+        const tel = res.telemetry;
+        setLiveTelemetry(tel);
+
+        setRouters((prev) => {
+          const target = prev.find((r) => r.id === activeRouter.id);
+          if (!target) return prev;
+          const nextModel = tel.board || target.model;
+          if (target.status === 'connected' && target.model === nextModel) {
+            return prev;
+          }
+          const updated = prev.map((r) =>
+            r.id === activeRouter.id
+              ? {
+                  ...r,
+                  model: nextModel,
+                  status: 'connected' as const,
+                  lastConnectedAt: new Date(tel.timestamp).toISOString(),
+                }
+              : r
+          );
+          saveTenantRouters(user.tenantUuid, updated);
+          return updated;
+        });
+
+        if (!userForcedSandboxRef.current && mode !== 'live') {
+          setMode('live');
+        }
+      } else if (!res.isFresh) {
+        setLiveTelemetry(null);
+        if (mode === 'live') {
+          setRouters((prev) => {
+            const target = prev.find((r) => r.id === activeRouter.id);
+            if (!target || target.status !== 'connected') return prev;
+            const updated = prev.map((r) =>
+              r.id === activeRouter.id ? { ...r, status: 'disconnected' as const } : r
+            );
+            saveTenantRouters(user.tenantUuid, updated);
+            return updated;
+          });
+        }
+      }
+    };
+
+    void pollTelemetry();
+    const timer = setInterval(pollTelemetry, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user, activeRouter?.id, activeModule, mode]);
 
   const handleSaveCustomProfiles = (nextProfiles: SpeedProfile[]) => {
     setCustomProfiles(nextProfiles);
@@ -312,7 +389,7 @@ export default function App() {
         lang={lang}
         onToggleLang={toggleLang}
         mode={mode}
-        onChangeMode={setMode}
+        onChangeMode={handleChangeMode}
         activeRouter={activeRouter}
         user={user}
         mobileMenuOpen={mobileMenuOpen}
@@ -350,6 +427,8 @@ export default function App() {
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
+                liveTelemetry={liveTelemetry}
                 onQuickBackup={handleQuickBackup}
               />
             )}
@@ -364,6 +443,11 @@ export default function App() {
                 onSelectRouter={setActiveRouterId}
                 onSaveRouters={handleSaveRouters}
                 onSaveToVault={handleSaveToVault}
+                onSwitchToLiveMode={() => {
+                  userForcedSandboxRef.current = false;
+                  setMode('live');
+                }}
+                onTelemetryDetected={(tel) => setLiveTelemetry(tel)}
               />
             )}
 
@@ -382,6 +466,7 @@ export default function App() {
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
                 customProfiles={customProfiles}
                 onSaveCustomProfiles={handleSaveCustomProfiles}
                 vouchers={vouchers}
@@ -413,6 +498,7 @@ export default function App() {
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
                 onTestInSandbox={handleTestInSandbox}
               />
             )}

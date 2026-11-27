@@ -157,49 +157,58 @@ export function generateAutoRollbackGuard(
   ].join('\n');
 }
 
+function escapeRouterOsDoubleQuoted(script: string): string {
+  return script.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
+}
+
 /**
- * Generates a personalized One-Line Terminal Connector Script for isolated multi-tenant RouterOS access.
+ * Generates a universal Router-to-Firebase Cloud Agent connector script (RouterOS v6 & v7)
+ * that works behind CGNAT / Starlink / without Public IP or port forwarding.
  */
 export function generateOneLineConnector(params: {
   osVersion: RouterOSVersion;
   tenantUuid: string;
+  routerId?: string;
   apiUser: string;
   apiPassword: string;
   enableCloudDdns: boolean;
   port: number;
 }): string {
-  const safeUser = sanitizeCliToken(params.apiUser, 'mikrocore_api');
-  const safePass = params.apiPassword.replace(/["\\$]/g, '') || 'MikroCore@2026!';
   const safeTenant = sanitizeCliToken(params.tenantUuid, 'tenant');
-  const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 80 : 8728)));
+  const safeRouterId = sanitizeCliToken(params.routerId || 'router_sandbox_1', 'router_sandbox_1');
+  const baseUrl = `https://shaban-mikrocore-default-rtdb.firebaseio.com/routers/${safeTenant}/${safeRouterId}`;
+  const telemetryUrl = `${baseUrl}/telemetry.json`;
+  const commandUrl = `${baseUrl}/command.json`;
 
-  if (params.osVersion === 'v7') {
-    const dstPorts = port === 80 || port === 443 ? '80,443' : `80,443,${port}`;
-    const wwwPort = port === 443 ? 80 : port;
-    const baseCommands = [
-      `/ip firewall filter add chain=input protocol=tcp dst-port=${dstPorts} action=accept place-before=0 comment="Shaban MikroCore API Port"`,
-      `/ip service set www disabled=no port=${wwwPort}`,
-      `:do { /user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive } on-error={}`,
-      `:do { /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}" } on-error={ /user set [find name="${safeUser}"] password="${safePass}" group=full }`,
-    ];
-    if (params.enableCloudDdns) {
-      baseCommands.push(
-        `/ip cloud set ddns-enabled=yes update-time=yes`,
-        `/ip cloud force-update`,
-        `:delay 3s`,
-        `:put ("CLOUD_DOMAIN=" . [/ip cloud get dns-name])`
-      );
-    }
-    return baseCommands.join('; ');
-  }
+  const agentBody = [
+    ':local bn [/system resource get board-name]',
+    ':local ver [/system resource get version]',
+    ':local cpu [/system resource get cpu-load]',
+    ':local fm [/system resource get free-memory]',
+    ':local tm [/system resource get total-memory]',
+    ':local up [/system resource get uptime]',
+    ':local hs 0',
+    ':do { :set hs [/ip hotspot active print count-only] } on-error={}',
+    ':local pp 0',
+    ':do { :set pp [/ppp active print count-only] } on-error={}',
+    ':local json ("{\\"board\\":\\"" . $bn . "\\",\\"version\\":\\"" . $ver . "\\",\\"cpu\\":" . $cpu . ",\\"freeMem\\":" . $fm . ",\\"totalMem\\":" . $tm . ",\\"uptime\\":\\"" . $up . "\\",\\"hotspot\\":" . $hs . ",\\"ppp\\":" . $pp . ",\\"timestamp\\":{\\".sv\\":\\"timestamp\\"}}")',
+    `:do { /tool fetch mode=https url="${telemetryUrl}" http-method=put http-header-field="Content-Type: application/json" http-data=$json output=none } on-error={}`,
+    ':local cmd ""',
+    `:do { :local res [/tool fetch mode=https url="${commandUrl}" as-value output=user]; :set cmd ($res->"data") } on-error={}`,
+    ':if ([:len $cmd] > 0 && $cmd != "null" && $cmd != "\\"null\\"" && $cmd != "\\"\\"") do={ :if ([:pick $cmd 0 1] = "\\"") do={ :set cmd [:pick $cmd 1 ([:len $cmd] - 1)] }; :local clean ""; :local i 0; :local n [:len $cmd]; :while ($i < $n) do={ :local c [:pick $cmd $i ($i + 1)]; :if ($c = "\\\\") do={ :local nx [:pick $cmd ($i + 1) ($i + 2)]; :if ($nx = "n") do={ :set clean ($clean . "\\n"); :set i ($i + 2) } else={ :if ($nx = "\\"" || $nx = "\\\\") do={ :set clean ($clean . $nx); :set i ($i + 2) } else={ :set clean ($clean . $c); :set i ($i + 1) } } } else={ :set clean ($clean . $c); :set i ($i + 1) } }; :do { :local runFn [:parse $clean]; $runFn } on-error={}; :do { /tool fetch mode=https url="' +
+      commandUrl +
+      '" http-method=delete output=none } on-error={} }',
+  ].join('; ');
 
-  // RouterOS v6 strictly separated syntax (no rest-api policy)
-  const v6UserCmd = `/user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
-  const v6SvcCmd = `/ip service set api disabled=no port=${port}; /ip service set www disabled=no`;
-  const v6CloudCmd = params.enableCloudDdns
-    ? `; /ip cloud set ddns-enabled=yes update-time=yes; :put [/ip cloud get dns-name]`
-    : '';
-  return `${v6UserCmd}; ${v6SvcCmd}${v6CloudCmd}`;
+  const escapedSource = escapeRouterOsDoubleQuoted(agentBody);
+
+  return [
+    ':do { /system scheduler remove [find name="MikroCore_CloudAgent"] } on-error={}',
+    ':do { /system script remove [find name="MikroCore_CloudAgent"] } on-error={}',
+    `/system script add name="MikroCore_CloudAgent" policy=read,write,policy,test,sensitive source="${escapedSource}"`,
+    '/system scheduler add name="MikroCore_CloudAgent" interval=15s start-time=startup policy=read,write,policy,test,sensitive on-event="/system script run MikroCore_CloudAgent"',
+    ':do { /system script run MikroCore_CloudAgent } on-error={}',
+  ].join('; ');
 }
 
 export const MIKROCORE_BRIDGE_URL = 'https://mikrocore-bridge.ismaeilshabaanj85.workers.dev';

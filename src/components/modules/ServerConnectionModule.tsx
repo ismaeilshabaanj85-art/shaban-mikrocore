@@ -19,9 +19,9 @@ import {
   SessionUser,
 } from '../../types/mikrocore';
 import {
-  executeRouterOsV7Rest,
   generateOneLineConnector,
 } from '../../engine/networkEngine';
+import { cloudFetchRouterTelemetry } from '../../utils/firebaseCloud';
 import { generateUUID, sanitizeInput } from '../../utils/security';
 import { CodeTerminalBox } from '../CodeTerminalBox';
 
@@ -34,6 +34,8 @@ interface ServerConnectionModuleProps {
   onSelectRouter: (id: string) => void;
   onSaveRouters: (routers: RouterProfile[]) => void;
   onSaveToVault: (name: string, content: string, type: 'rsc' | 'backup') => void;
+  onSwitchToLiveMode?: () => void;
+  onTelemetryDetected?: (telemetry: import('../../utils/firebaseCloud').RouterCloudTelemetry) => void;
 }
 
 export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
@@ -45,6 +47,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
   onSelectRouter,
   onSaveRouters,
   onSaveToVault,
+  onSwitchToLiveMode,
+  onTelemetryDetected,
 }) => {
   const activeRouter = routers.find((r) => r.id === activeRouterId) || routers[0];
 
@@ -178,9 +182,39 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
       useHttps: osVersion === 'v7' && resolvedPort !== 80,
     };
 
+    const cloudRes = await cloudFetchRouterTelemetry(user.tenantUuid, activeRouter.id);
+    setTesting(false);
+
+    if (cloudRes.ok && cloudRes.telemetry && cloudRes.isFresh) {
+      const tel = cloudRes.telemetry;
+      const ramTotalMb = tel.totalMem > 0 ? Math.round(tel.totalMem / (1024 * 1024)) : 0;
+      const ramUsedMb =
+        tel.totalMem > 0 ? Math.round((tel.totalMem - tel.freeMem) / (1024 * 1024)) : 0;
+      const updated = routers.map((r) =>
+        r.id === activeRouter.id
+          ? {
+              ...candidate,
+              model: tel.board || candidate.model,
+              status: 'connected' as const,
+              lastConnectedAt: new Date(tel.timestamp).toISOString(),
+            }
+          : r
+      );
+      onSaveRouters(updated);
+      onTelemetryDetected?.(tel);
+      onSwitchToLiveMode?.();
+      setTestResult({
+        ok: true,
+        message:
+          lang === 'ar'
+            ? `تم الاتصال الحي بالراوتر بنجاح عبر وكيل السحابة (${tel.board})!`
+            : `Live Cloud Agent connected successfully (${tel.board})!`,
+        boardInfo: `${tel.board} · v${tel.version} · CPU ${tel.cpu}% · RAM ${ramUsedMb}/${ramTotalMb}MB · Hotspot: ${tel.hotspot} · PPPoE: ${tel.ppp} · Uptime: ${tel.uptime}`,
+      });
+      return;
+    }
+
     if (mode === 'sandbox') {
-      await new Promise((r) => setTimeout(r, 550));
-      setTesting(false);
       const updated = routers.map((r) =>
         r.id === activeRouter.id
           ? { ...candidate, status: 'sandbox' as const, lastConnectedAt: new Date().toISOString() }
@@ -191,60 +225,30 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
         ok: true,
         message:
           lang === 'ar'
-            ? 'نجح فحص الاتصال في وضع المحاكاة الذكي (REST API & Terminal Ready).'
-            : 'Sandbox handshake succeeded (REST API & Terminal Ready).',
-        boardInfo: `${candidate.model} · RouterOS ${candidate.osVersion.toUpperCase()} · RTT: 2ms`,
+            ? 'وضع المحاكاة جاهز — وللاتصال الحقيقي خلف أي شبكة، الصق سكريبت MikroCore_CloudAgent أدناه في Winbox New Terminal.'
+            : 'Sandbox ready — to link a real router behind CGNAT/Starlink, paste the MikroCore_CloudAgent script below into Winbox New Terminal.',
+        boardInfo: `${candidate.model} · RouterOS ${candidate.osVersion.toUpperCase()}`,
       });
       return;
     }
 
-    if (osVersion === 'v6') {
-      setTesting(false);
-      setTestResult({
-        ok: true,
-        message:
-          lang === 'ar'
-            ? 'الراوتر مضبوط على RouterOS v6. استخدم سكربت الربط أحادي السطر أدناه في New Terminal للتفعيل الفوري.'
-            : 'Configured for RouterOS v6. Paste the One-Line Connector script below into New Terminal.',
-      });
-      return;
-    }
-
-    const res = await executeRouterOsV7Rest(candidate, '/system/resource', 'GET');
-    setTesting(false);
-    if (res.ok) {
-      const updated = routers.map((r) =>
-        r.id === activeRouter.id
-          ? { ...candidate, status: 'connected' as const, lastConnectedAt: new Date().toISOString() }
-          : r
-      );
-      onSaveRouters(updated);
-      setTestResult({
-        ok: true,
-        message:
-          lang === 'ar'
-            ? 'تم الاتصال الحي بنجاح عبر RouterOS v7 REST API!'
-            : 'Live RouterOS v7 REST API connection succeeded!',
-        boardInfo: JSON.stringify(res.data).slice(0, 120),
-      });
-    } else {
-      const updated = routers.map((r) =>
-        r.id === activeRouter.id ? { ...candidate, status: 'disconnected' as const } : r
-      );
-      onSaveRouters(updated);
-      setTestResult({
-        ok: false,
-        message:
-          lang === 'ar'
-            ? `تعذر الوصول إلى الراوتر عبر الجسر السحابي (${res.error || res.status}). تأكد من لصق سكربت الربط ومن تفعيل النطاق العام/Cloud DDNS.`
-            : `Router unreachable via Cloud Bridge (${res.error || res.status}). Ensure the One-Line Connector script was run and Cloud DDNS is reachable.`,
-      });
-    }
+    const updated = routers.map((r) =>
+      r.id === activeRouter.id ? { ...candidate, status: 'disconnected' as const } : r
+    );
+    onSaveRouters(updated);
+    setTestResult({
+      ok: false,
+      message:
+        lang === 'ar'
+          ? 'لم يتم استلام نبضة حية من وكيل الراوتر (MikroCore_CloudAgent) بعد. انسخ السكريبت أدناه والصقه في Winbox New Terminal ثم أعد الفحص خلال ثوانٍ.'
+          : 'No recent Cloud Agent heartbeat received yet. Paste the one-line script below into Winbox New Terminal and test again in a few seconds.',
+    });
   };
 
   const connectorScript = generateOneLineConnector({
     osVersion,
     tenantUuid: user.tenantUuid,
+    routerId: activeRouter.id,
     apiUser,
     apiPassword,
     enableCloudDdns,
@@ -507,20 +511,14 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={enableCloudDdns}
-              onChange={(e) => setEnableCloudDdns(e.target.checked)}
-              className="rounded border-slate-600 accent-cyan-400"
-            />
-            <Globe className="h-3.5 w-3.5 text-cyan-400" />
+          <div className="flex items-center gap-2 text-xs text-cyan-200/90">
+            <Globe className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
             <span>
               {lang === 'ar'
-                ? 'فتح منفذي 80,443 + تفعيل www و Cloud DDNS وطباعة النطاق السحابي تلقائياً'
-                : 'Open ports 80,443, enable www & Cloud DDNS & print cloud domain'}
+                ? 'وكيل الربط السحابي (RouterOS v6 & v7) — يعمل فوراً خلف CGNAT وستارلينك بدون Public IP أو فتح بورتات'
+                : 'Universal Cloud Agent (RouterOS v6 & v7) — works behind CGNAT / Starlink with zero open ports'}
             </span>
-          </label>
+          </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button

@@ -11,12 +11,18 @@ import {
   Zap,
 } from 'lucide-react';
 import { AppMode, Language, NocTelemetry, RouterProfile } from '../../types/mikrocore';
-import { executeRouterOsV7Rest } from '../../engine/networkEngine';
+import {
+  RouterCloudTelemetry,
+  cloudSendAndAwaitRouterCommand,
+} from '../../utils/firebaseCloud';
+import { loadSession } from '../../utils/storage';
 
 interface LiveNocDashboardProps {
   lang: Language;
   mode: AppMode;
   activeRouter: RouterProfile;
+  tenantUuid?: string;
+  liveTelemetry?: RouterCloudTelemetry | null;
   onQuickBackup: () => void;
 }
 
@@ -84,6 +90,8 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
   lang,
   mode,
   activeRouter,
+  tenantUuid,
+  liveTelemetry,
   onQuickBackup,
 }) => {
   const [telemetry, setTelemetry] = useState<NocTelemetry>(() => ({
@@ -111,78 +119,43 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
   ]);
   const [rebootConfirm, setRebootConfirm] = useState(false);
 
-  // Real-time Sandbox polling / Live REST polling
+  // Sync directly from Firebase Cloud Agent telemetry when available in Live mode
   useEffect(() => {
-    const interval = setInterval(async () => {
-      if (mode === 'live' && activeRouter.osVersion === 'v7') {
-        const [resResult, healthResult, hotspotResult, pppResult] = await Promise.allSettled([
-          executeRouterOsV7Rest(activeRouter, '/system/resource', 'GET'),
-          executeRouterOsV7Rest(activeRouter, '/system/health', 'GET'),
-          executeRouterOsV7Rest(activeRouter, '/ip/hotspot/active', 'GET'),
-          executeRouterOsV7Rest(activeRouter, '/ppp/active', 'GET'),
-        ]);
+    if (mode !== 'live' || !liveTelemetry) return;
 
-        const res = resResult.status === 'fulfilled' ? resResult.value : null;
-        if (res?.ok && res.data && typeof res.data === 'object') {
-          const d = res.data as Record<string, string | number>;
-          const cpu = Number(d['cpu-load']) || 0;
-          const totalMem = Number(d['total-memory']) || 1024;
-          const freeMem = Number(d['free-memory']) || 512;
-          const usedPct = Math.round(((totalMem - freeMem) / totalMem) * 100);
-          const totalMb = Math.round(totalMem / (1024 * 1024));
-          const usedMb = Math.round((totalMem - freeMem) / (1024 * 1024));
+    const totalMem = liveTelemetry.totalMem || 0;
+    const freeMem = liveTelemetry.freeMem || 0;
+    const totalMb = totalMem > 0 ? Math.round(totalMem / (1024 * 1024)) : 0;
+    const usedMb = totalMem > 0 ? Math.max(0, Math.round((totalMem - freeMem) / (1024 * 1024))) : 0;
+    const usedPct =
+      totalMem > 0 ? Math.min(100, Math.max(0, Math.round(((totalMem - freeMem) / totalMem) * 100))) : 0;
 
-          let nextTemp: number | undefined;
-          let nextVolt: number | undefined;
-          if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
-            const hData = healthResult.value.data;
-            if (Array.isArray(hData)) {
-              for (const item of hData as Array<Record<string, string | number>>) {
-                if (item.name === 'temperature' || item.name === 'cpu-temperature') {
-                  const val = Number(item.value);
-                  if (!Number.isNaN(val)) nextTemp = val;
-                } else if (item.name === 'voltage') {
-                  const val = Number(item.value);
-                  if (!Number.isNaN(val)) nextVolt = val;
-                }
-              }
-            } else if (hData && typeof hData === 'object') {
-              const hObj = hData as Record<string, string | number>;
-              if (hObj.temperature !== undefined) nextTemp = Number(hObj.temperature);
-              if (hObj.voltage !== undefined) nextVolt = Number(hObj.voltage);
-            }
-          }
+    setTelemetry((prev) => ({
+      ...prev,
+      cpuLoad: liveTelemetry.cpu,
+      ramUsedPercent: usedPct,
+      ramTotalMb: totalMb > 0 ? totalMb : prev.ramTotalMb,
+      ramUsedMb: totalMb > 0 ? usedMb : prev.ramUsedMb,
+      uptime: liveTelemetry.uptime || prev.uptime,
+      activeHotspot: liveTelemetry.hotspot,
+      activePppoe: liveTelemetry.ppp,
+      history: [
+        ...prev.history.slice(1),
+        {
+          time: new Date(liveTelemetry.timestamp || Date.now()).toLocaleTimeString(),
+          rx: Math.max(12, Math.round((liveTelemetry.hotspot + liveTelemetry.ppp) * 2.4 + liveTelemetry.cpu)),
+          tx: Math.max(4, Math.round((liveTelemetry.hotspot + liveTelemetry.ppp) * 0.7)),
+        },
+      ],
+    }));
+  }, [mode, liveTelemetry]);
 
-          const hotspotCount =
-            hotspotResult.status === 'fulfilled' &&
-            hotspotResult.value.ok &&
-            Array.isArray(hotspotResult.value.data)
-              ? hotspotResult.value.data.length
-              : undefined;
+  // Sandbox simulation ticks (disabled whenever real Cloud Agent liveTelemetry is active)
+  useEffect(() => {
+    if (mode === 'live' && liveTelemetry) return;
 
-          const pppCount =
-            pppResult.status === 'fulfilled' &&
-            pppResult.value.ok &&
-            Array.isArray(pppResult.value.data)
-              ? pppResult.value.data.length
-              : undefined;
-
-          setTelemetry((prev) => ({
-            ...prev,
-            cpuLoad: cpu,
-            ramUsedPercent: usedPct,
-            ramTotalMb: totalMb > 0 ? totalMb : prev.ramTotalMb,
-            ramUsedMb: usedMb >= 0 ? usedMb : prev.ramUsedMb,
-            temperatureC: nextTemp ?? prev.temperatureC,
-            voltageV: nextVolt ?? prev.voltageV,
-            activeHotspot: hotspotCount ?? prev.activeHotspot,
-            activePppoe: pppCount ?? prev.activePppoe,
-            uptime: String(d.uptime || prev.uptime),
-          }));
-          return;
-        }
-      }
-
+    const interval = setInterval(() => {
+      if (mode === 'live') return;
       setTelemetry((prev) => {
         const nextRx = Math.max(
           25,
@@ -206,7 +179,10 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
     }, 2200);
 
     return () => clearInterval(interval);
-  }, [mode, activeRouter]);
+  }, [mode, liveTelemetry]);
+
+  const effectiveTenant =
+    tenantUuid || loadSession()?.tenantUuid || '00000000-0000-4000-8000-000000000001';
 
   const appendLog = (line: string) => {
     setConsoleLog((prev) => [`[${new Date().toLocaleTimeString()}] ${line}`, ...prev].slice(0, 12));
@@ -222,22 +198,62 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
   };
 
   const handlePingTest = async () => {
-    if (mode === 'live' && activeRouter.osVersion === 'v7') {
-      const res = await executeRouterOsV7Rest(activeRouter, '/tool/ping', 'POST', {
-        address: pingTarget,
-        count: '3',
-      });
-      if (res.ok) {
-        appendLog(`PING ${pingTarget} -> ${JSON.stringify(res.data).slice(0, 90)}`);
-        return;
+    if (mode === 'live') {
+      const safeTarget = pingTarget.replace(/[^a-zA-Z0-9.:-]/g, '') || '1.1.1.1';
+      appendLog(
+        lang === 'ar'
+          ? `تم إرسال أمر Ping (${safeTarget}) إلى الراوتر عبر الوكيل السحابي...`
+          : `Queued Ping (${safeTarget}) to router via Cloud Agent...`
+      );
+      const res = await cloudSendAndAwaitRouterCommand(
+        effectiveTenant,
+        activeRouter.id,
+        `/tool ping address=${safeTarget} count=3`
+      );
+      if (res.executed) {
+        appendLog(
+          lang === 'ar'
+            ? `تم تنفيذ فحص Ping (${safeTarget}) على ${activeRouter.name} بنجاح.`
+            : `Ping (${safeTarget}) executed on ${activeRouter.name} successfully.`
+        );
+      } else {
+        appendLog(
+          lang === 'ar'
+            ? `أمر Ping (${safeTarget}) في انتظار نبضة الوكيل القادمة.`
+            : `Ping (${safeTarget}) queued for next Cloud Agent heartbeat.`
+        );
       }
+      return;
     }
     const ms1 = Math.round(14 + Math.random() * 18);
     const ms2 = Math.round(14 + Math.random() * 18);
     appendLog(`PING ${pingTarget}: 64 bytes ttl=58 time=${ms1}ms | time=${ms2}ms | 0% loss`);
   };
 
-  const handleClearStaleSessions = () => {
+  const handleClearStaleSessions = async () => {
+    if (mode === 'live') {
+      appendLog(
+        lang === 'ar'
+          ? 'جارٍ إرسال أمر تنظيف جلسات الهوتسبوت و PPPoE المعلقة إلى الراوتر...'
+          : 'Pushing stale Hotspot/PPPoE cleanup command to router...'
+      );
+      const res = await cloudSendAndAwaitRouterCommand(
+        effectiveTenant,
+        activeRouter.id,
+        '/ip hotspot active remove [find idle-time>15m]'
+      );
+      appendLog(
+        res.executed
+          ? lang === 'ar'
+            ? 'تم تنفيذ تنظيف الجلسات المعلقة على الراوتر الحقيقي بنجاح! ✅'
+            : 'Stale session cleanup executed on live router successfully! ✅'
+          : lang === 'ar'
+          ? 'تم جدولة أمر تنظيف الجلسات في قائمة السحابة.'
+          : 'Stale session cleanup queued in Firebase.'
+      );
+      return;
+    }
+
     const cleared = Math.max(1, Math.floor(Math.random() * 7) + 2);
     setTelemetry((prev) => ({
       ...prev,
@@ -250,8 +266,25 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
     );
   };
 
-  const handleSafeReboot = () => {
+  const handleSafeReboot = async () => {
     setRebootConfirm(false);
+    if (mode === 'live') {
+      const res = await cloudSendAndAwaitRouterCommand(
+        effectiveTenant,
+        activeRouter.id,
+        '/system reboot'
+      );
+      appendLog(
+        res.executed
+          ? lang === 'ar'
+            ? `تم سحب وتنفيذ إعادة تشغيل آمنة على ${activeRouter.name} بنجاح.`
+            : `Safe reboot command pulled and executed on ${activeRouter.name}.`
+          : lang === 'ar'
+          ? `تم وضع أمر إعادة التشغيل في قائمة التنفيذ لـ ${activeRouter.name}.`
+          : `Safe reboot command queued for ${activeRouter.name}.`
+      );
+      return;
+    }
     appendLog(
       lang === 'ar'
         ? `تم جدولة إعادة تشغيل آمنة لـ ${activeRouter.name} بعد حفظ الإعدادات.`
@@ -289,7 +322,8 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
             </span>
           </h2>
           <p className="mt-1 text-xs text-slate-400">
-            {activeRouter.name} · {activeRouter.model} · Uptime:{' '}
+            {activeRouter.name} · {liveTelemetry?.board || activeRouter.model}
+            {liveTelemetry?.version ? ` · v${liveTelemetry.version}` : ''} · Uptime:{' '}
             <span className="font-mono text-cyan-300" dir="ltr">
               {telemetry.uptime}
             </span>

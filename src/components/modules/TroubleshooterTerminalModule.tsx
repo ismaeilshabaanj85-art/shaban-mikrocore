@@ -16,15 +16,15 @@ import {
   generateScenarioScript,
   getMissingScenarioQuestions,
 } from '../../engine/troubleshooterEngine';
-import {
-  executeRouterOsV7Rest,
-  generateAutoRollbackGuard,
-} from '../../engine/networkEngine';
+import { generateAutoRollbackGuard } from '../../engine/networkEngine';
+import { cloudSendAndAwaitRouterCommand } from '../../utils/firebaseCloud';
+import { loadSession } from '../../utils/storage';
 
 interface TroubleshooterTerminalModuleProps {
   lang: Language;
   mode: AppMode;
   activeRouter: RouterProfile;
+  tenantUuid?: string;
   onTestInSandbox: (script: string) => void;
 }
 
@@ -32,6 +32,7 @@ export const TroubleshooterTerminalModule: React.FC<TroubleshooterTerminalModule
   lang,
   mode,
   activeRouter,
+  tenantUuid,
   onTestInSandbox,
 }) => {
   const [selectedId, setSelectedId] = useState<ScenarioId>('block_apps');
@@ -41,6 +42,7 @@ export const TroubleshooterTerminalModule: React.FC<TroubleshooterTerminalModule
   const [copied, setCopied] = useState(false);
   const [rollbackActive, setRollbackActive] = useState(false);
   const [rollbackSec, setRollbackSec] = useState(60);
+  const [pushing, setPushing] = useState(false);
   const [execLog, setExecLog] = useState<string>('');
 
   const scenario =
@@ -70,8 +72,12 @@ export const TroubleshooterTerminalModule: React.FC<TroubleshooterTerminalModule
 
   const handleApplyDirect = async () => {
     if (!generatedCode) return;
+    const effectiveTenant =
+      tenantUuid || loadSession()?.tenantUuid || '00000000-0000-4000-8000-000000000001';
+
     setRollbackActive(true);
     setRollbackSec(60);
+    setPushing(true);
 
     const timer = setInterval(() => {
       setRollbackSec((prev) => {
@@ -83,38 +89,54 @@ export const TroubleshooterTerminalModule: React.FC<TroubleshooterTerminalModule
       });
     }, 1000);
 
-    if (mode === 'sandbox') {
-      setExecLog(
-        lang === 'ar'
-          ? `تم التنفيذ التجريبي بنجاح مع تفعيل درع الاستعادة التلقائية (60 ثانية) على ${activeRouter.name}.`
-          : `Executed with 60s Auto-Rollback Safety Timer on ${activeRouter.name} (Sandbox).`
-      );
-      return;
-    }
-
-    if (activeRouter.osVersion === 'v6') {
-      setExecLog(
-        lang === 'ar'
-          ? 'RouterOS v6 يتطلب لصق الكود في New Terminal داخل Winbox.'
-          : 'RouterOS v6 requires pasting into Winbox New Terminal.'
-      );
-      return;
-    }
-
-    const res = await executeRouterOsV7Rest(activeRouter, '/system/script/add', 'POST', {
-      name: `MikroCore_Fix_${Date.now()}`,
-      source: `${generateAutoRollbackGuard('v7', 60)}\n${generatedCode}`,
-    });
-
     setExecLog(
-      res.ok
-        ? lang === 'ar'
-          ? 'تم إرسال التعديل مباشرة عبر REST API مع مؤقت استعادة 60 ثانية.'
-          : 'Pushed directly via REST API with 60s Auto-Rollback guard.'
-        : lang === 'ar'
-        ? `تعذر الإرسال المباشر (${res.error || res.status}). انسخ الكود لـ New Terminal.`
-        : `Direct REST push failed (${res.error || res.status}). Copy into New Terminal.`
+      lang === 'ar'
+        ? `جارٍ إرسال التعديل إلى سحابة Firebase لراوتر ${activeRouter.name} (${activeRouter.osVersion.toUpperCase()})...`
+        : `Pushing script to Firebase Cloud for ${activeRouter.name} (${activeRouter.osVersion.toUpperCase()})...`
     );
+
+    const fullPayload = `${generateAutoRollbackGuard(activeRouter.osVersion, 60)}\n${generatedCode}`;
+    const res = await cloudSendAndAwaitRouterCommand(
+      effectiveTenant,
+      activeRouter.id,
+      fullPayload,
+      () => {
+        setExecLog(
+          lang === 'ar'
+            ? 'تم وضع الأمر في قائمة التنفيذ السحابية — بانتظار سحب الوكيل MikroCore_CloudAgent وتنفيذه...'
+            : 'Command queued in Firebase — waiting for MikroCore_CloudAgent to pull & execute...'
+        );
+      }
+    );
+
+    setPushing(false);
+
+    if (!res.ok) {
+      setExecLog(
+        lang === 'ar'
+          ? `تعذر الإرسال إلى السحابة (${res.error || 'خطأ شبكة'}).`
+          : `Cloud push failed (${res.error || 'network error'}).`
+      );
+      return;
+    }
+
+    if (res.executed) {
+      setExecLog(
+        lang === 'ar'
+          ? `تم سحب الكود وتنفيذه على الراوتر ${activeRouter.name} بنجاح! ✅ (مؤقت الاستعادة: 60 ثانية)`
+          : `Command pulled and executed on ${activeRouter.name} successfully! ✅ (60s Rollback guard)`
+      );
+    } else {
+      setExecLog(
+        mode === 'sandbox'
+          ? lang === 'ar'
+            ? `تم وضع التعديل في قائمة الانتظار السحابية للراوتر ${activeRouter.name} مع درع 60 ثانية.`
+            : `Script queued in Firebase for ${activeRouter.name} with 60s Rollback guard.`
+          : lang === 'ar'
+          ? 'تم وضع الأمر في قائمة التنفيذ السحابية — سينفذه الراوتر تلقائياً فور نبضة الوكيل القادمة.'
+          : 'Command queued in Firebase — router will execute on next Cloud Agent heartbeat.'
+      );
+    }
   };
 
   return (
@@ -254,13 +276,19 @@ export const TroubleshooterTerminalModule: React.FC<TroubleshooterTerminalModule
 
             <button
               type="button"
-              disabled={!ready}
+              disabled={!ready || pushing}
               onClick={handleApplyDirect}
               className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-400 to-emerald-400 px-3.5 py-1.5 text-xs font-bold text-slate-950 hover:brightness-110 disabled:opacity-40 cursor-pointer"
             >
               <Play className="h-3.5 w-3.5" />
               <span>
-                {lang === 'ar' ? 'تطبيق مباشر على الراوتر' : 'Apply Directly to Router'}
+                {pushing
+                  ? lang === 'ar'
+                    ? 'جارٍ الإرسال...'
+                    : 'Pushing...'
+                  : lang === 'ar'
+                  ? 'إرسال وتنفيذ مباشر على الراوتر 🚀'
+                  : 'Push & Execute on Router 🚀'}
               </span>
             </button>
           </div>

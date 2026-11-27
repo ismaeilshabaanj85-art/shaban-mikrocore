@@ -49,10 +49,11 @@ test('Auto-Rollback Safety Guard creates 60s scheduler and backup', () => {
   assert.equal(guard.includes('MikroCore_AutoRollback'), true);
 });
 
-test('One-Line Connector emits safe non-failing v7 script with port 80, Cloud DDNS, and separates v6 API', () => {
+test('One-Line Connector emits universal v6 & v7 MikroCore_CloudAgent script with telemetry & command polling', () => {
   const v7Conn = generateOneLineConnector({
     osVersion: 'v7',
     tenantUuid: 'tenant-123',
+    routerId: 'router_alpha',
     apiUser: 'apiuser',
     apiPassword: 'secret',
     enableCloudDdns: true,
@@ -61,17 +62,25 @@ test('One-Line Connector emits safe non-failing v7 script with port 80, Cloud DD
   const v6Conn = generateOneLineConnector({
     osVersion: 'v6',
     tenantUuid: 'tenant-123',
+    routerId: 'router_alpha',
     apiUser: 'apiuser',
     apiPassword: 'secret',
     enableCloudDdns: false,
     port: 8728,
   });
-  const expectedV7 =
-    '/ip firewall filter add chain=input protocol=tcp dst-port=80,443 action=accept place-before=0 comment="Shaban MikroCore API Port"; /ip service set www disabled=no port=80; :do { /user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive } on-error={}; :do { /user add name="apiuser" password="secret" group=full comment="Tenant:tenant-123" } on-error={ /user set [find name="apiuser"] password="secret" group=full }; /ip cloud set ddns-enabled=yes update-time=yes; /ip cloud force-update; :delay 3s; :put ("CLOUD_DOMAIN=" . [/ip cloud get dns-name])';
-  assert.equal(v7Conn, expectedV7);
-  assert.equal(v7Conn.includes('enable-ssl-certificate'), false);
-  assert.equal(v6Conn.includes(':do { /user group add'), false);
-  assert.equal(v6Conn.includes('/ip service set api disabled=no port=8728'), true);
+
+  assert.equal(
+    v7Conn.startsWith(':do { /system scheduler remove [find name="MikroCore_CloudAgent"] } on-error={};'),
+    true
+  );
+  assert.equal(v7Conn, v6Conn);
+  assert.equal(v7Conn.includes('interval=15s'), true);
+  assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/telemetry.json'), true);
+  assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/command.json'), true);
+  assert.equal(v7Conn.includes('[:parse \\$clean]'), true);
+  assert.equal(v7Conn.includes('http-method=delete'), true);
+  assert.equal(v7Conn.includes('/ip hotspot active print count-only'), true);
+  assert.equal(v7Conn.includes('/ppp active print count-only'), true);
 });
 
 test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge with http:// on port 80 and https:// on port 443', async () => {

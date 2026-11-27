@@ -1,5 +1,5 @@
 import { CustomerAccount } from '../types/mikrocore';
-import { constantTimeEqual, generateUUID, sanitizeInput } from './security';
+import { constantTimeEqual, generateUUID, sanitizeCliToken, sanitizeInput } from './security';
 
 export const FIREBASE_RTDB_URL = 'https://shaban-mikrocore-default-rtdb.firebaseio.com';
 
@@ -198,3 +198,157 @@ export async function cloudDeleteTenant(
     return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
   }
 }
+
+// === Router-to-Firebase Cloud Agent Telemetry & Command Queue ===
+
+export interface RouterCloudTelemetry {
+  board: string;
+  version: string;
+  cpu: number;
+  freeMem: number;
+  totalMem: number;
+  uptime: string;
+  hotspot: number;
+  ppp: number;
+  timestamp: number;
+}
+
+export function getRouterCloudBase(tenantUuid: string, routerId: string): string {
+  const safeTenant = sanitizeCliToken(tenantUuid, 'tenant');
+  const safeRouterId = sanitizeCliToken(routerId, 'router_sandbox_1');
+  return `${FIREBASE_RTDB_URL}/routers/${encodeURIComponent(safeTenant)}/${encodeURIComponent(safeRouterId)}`;
+}
+
+export function isTelemetryFresh(
+  telemetry: Partial<RouterCloudTelemetry> | null | undefined,
+  nowMs: number = Date.now(),
+  maxAgeMs: number = 60_000
+): boolean {
+  if (!telemetry || typeof telemetry !== 'object') return false;
+  if (!telemetry.board || typeof telemetry.board !== 'string') return false;
+  if (typeof telemetry.timestamp !== 'number' || !Number.isFinite(telemetry.timestamp)) {
+    return false;
+  }
+  return Math.abs(nowMs - telemetry.timestamp) <= maxAgeMs;
+}
+
+export async function cloudFetchRouterTelemetry(
+  tenantUuid: string,
+  routerId: string
+): Promise<{
+  ok: boolean;
+  telemetry: RouterCloudTelemetry | null;
+  isFresh: boolean;
+  error?: string;
+}> {
+  try {
+    const res = await fetchWithTimeout(
+      `${getRouterCloudBase(tenantUuid, routerId)}/telemetry.json`,
+      { method: 'GET', cache: 'no-store' }
+    );
+    if (!res.ok) {
+      return { ok: false, telemetry: null, isFresh: false, error: `HTTP ${res.status}` };
+    }
+    const raw = (await res.json()) as Partial<RouterCloudTelemetry> | null;
+    if (!raw || typeof raw !== 'object' || !raw.board) {
+      return { ok: true, telemetry: null, isFresh: false };
+    }
+    const telemetry: RouterCloudTelemetry = {
+      board: String(raw.board),
+      version: String(raw.version || ''),
+      cpu: Number(raw.cpu) || 0,
+      freeMem: Number(raw.freeMem) || 0,
+      totalMem: Number(raw.totalMem) || 0,
+      uptime: String(raw.uptime || '0s'),
+      hotspot: Number(raw.hotspot) || 0,
+      ppp: Number(raw.ppp) || 0,
+      timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : 0,
+    };
+    return {
+      ok: true,
+      telemetry,
+      isFresh: isTelemetryFresh(telemetry),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      telemetry: null,
+      isFresh: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function cloudSendRouterCommand(
+  tenantUuid: string,
+  routerId: string,
+  commandScript: string
+): Promise<{ ok: boolean; error?: string }> {
+  const cleanScript = commandScript.trim();
+  if (!cleanScript) {
+    return { ok: false, error: 'Empty command script' };
+  }
+  try {
+    const res = await fetchWithTimeout(
+      `${getRouterCloudBase(tenantUuid, routerId)}/command.json`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanScript),
+      }
+    );
+    return res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status}` };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function cloudWaitForCommandExecution(
+  tenantUuid: string,
+  routerId: string,
+  timeoutMs: number = 22_000,
+  pollIntervalMs: number = 2_000
+): Promise<{ executed: boolean; timedOut: boolean; error?: string }> {
+  const startedAt = Date.now();
+  const endpoint = `${getRouterCloudBase(tenantUuid, routerId)}/command.json`;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    try {
+      const res = await fetchWithTimeout(endpoint, { method: 'GET', cache: 'no-store' });
+      if (res.ok) {
+        const val = await res.json();
+        if (val === null || val === '') {
+          return { executed: true, timedOut: false };
+        }
+      }
+    } catch {
+      // keep polling until timeout
+    }
+  }
+  return { executed: false, timedOut: true };
+}
+
+export async function cloudSendAndAwaitRouterCommand(
+  tenantUuid: string,
+  routerId: string,
+  commandScript: string,
+  onQueued?: () => void
+): Promise<{ ok: boolean; executed: boolean; timedOut: boolean; error?: string }> {
+  const sendRes = await cloudSendRouterCommand(tenantUuid, routerId, commandScript);
+  if (!sendRes.ok) {
+    return { ok: false, executed: false, timedOut: false, error: sendRes.error };
+  }
+  onQueued?.();
+  const waitRes = await cloudWaitForCommandExecution(tenantUuid, routerId);
+  return {
+    ok: true,
+    executed: waitRes.executed,
+    timedOut: waitRes.timedOut,
+    error: waitRes.error,
+  };
+}
+
