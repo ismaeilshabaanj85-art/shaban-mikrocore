@@ -303,10 +303,10 @@ export function getDefaultSandboxRouter(): RouterProfile {
     osVersion: 'v7',
     connectionMethod: 'local_ip',
     host: '192.168.88.1',
-    port: 443,
+    port: 80,
     apiUser: 'mikrocore-api',
     apiPassword: '',
-    useHttps: true,
+    useHttps: false,
     status: 'sandbox',
   };
 }

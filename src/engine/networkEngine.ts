@@ -171,12 +171,13 @@ export function generateOneLineConnector(params: {
   const safeUser = sanitizeCliToken(params.apiUser, 'mikrocore_api');
   const safePass = params.apiPassword.replace(/["\\$]/g, '') || 'MikroCore@2026!';
   const safeTenant = sanitizeCliToken(params.tenantUuid, 'tenant');
-  const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 443 : 8728)));
+  const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 80 : 8728)));
 
   const userCmd = `/user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive; /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
 
   if (params.osVersion === 'v7') {
     const dstPorts = port === 443 || port === 80 ? '443,80' : `${port},443,80`;
+    const sslPort = port === 80 ? 443 : port;
     const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${dstPorts} action=accept place-before=0 comment="Shaban MikroCore API Port"`;
     const wwwCmd = `/ip service set www disabled=no port=80`;
     if (params.enableCloudDdns) {
@@ -189,12 +190,12 @@ export function generateOneLineConnector(params: {
         `:delay 3s`,
         `:local dns [/ip cloud get dns-name]`,
         `/certificate enable-ssl-certificate dns-name=$dns`,
-        `/ip service set www-ssl disabled=no port=${port}`,
+        `/ip service set www-ssl disabled=no port=${sslPort}`,
         `/ip service set api-ssl disabled=no`,
         `:put ("CLOUD_DOMAIN=" . $dns)`,
       ].join('; ');
     }
-    const localSslCmd = `/certificate add name=mikrocore-ca common-name=mikrocore.local key-usage=key-cert-sign,crl-sign; /certificate sign mikrocore-ca; /certificate add name=mikrocore-srv common-name=mikrocore.local; /certificate sign mikrocore-srv ca=mikrocore-ca; /ip service set www-ssl disabled=no certificate=mikrocore-srv port=${port}; /ip service set api-ssl disabled=no certificate=mikrocore-srv`;
+    const localSslCmd = `/certificate add name=mikrocore-ca common-name=mikrocore.local key-usage=key-cert-sign,crl-sign; /certificate sign mikrocore-ca; /certificate add name=mikrocore-srv common-name=mikrocore.local; /certificate sign mikrocore-srv ca=mikrocore-ca; /ip service set www-ssl disabled=no certificate=mikrocore-srv port=${sslPort}; /ip service set api-ssl disabled=no certificate=mikrocore-srv`;
     return `${userCmd}; ${fwCmd}; ${wwwCmd}; ${localSslCmd}`;
   }
 
@@ -220,6 +221,7 @@ export interface RestApiResult {
 /**
  * Functional RouterOS v7 REST API client routed securely through the Cloudflare Worker Bridge
  * using X-Target-Url + Basic Auth + 60s Auto-Rollback script prep.
+ * Uses http:// automatically when port is 80 to avoid SSL 525 handshake errors.
  */
 export async function executeRouterOsV7Rest(
   router: RouterProfile,
@@ -229,7 +231,8 @@ export async function executeRouterOsV7Rest(
 ): Promise<RestApiResult> {
   const rollbackScript = generateAutoRollbackGuard(router.osVersion, 60);
   const cleanHost = sanitizeCliToken(router.host, '192.168.88.1');
-  const proto = router.useHttps === false ? 'http' : 'https';
+  const numericPort = Number(router.port);
+  const proto = numericPort === 80 || router.useHttps === false ? 'http' : 'https';
   const portPart = router.port ? `:${router.port}` : '';
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const targetUrl = `${proto}://${cleanHost}${portPart}/rest${normalizedEndpoint}`;

@@ -95,6 +95,7 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
 
   const handleSaveCurrent = (e: React.FormEvent) => {
     e.preventDefault();
+    const resolvedPort = Number(port) || (osVersion === 'v7' ? 80 : 8728);
     const updated = routers.map((r) =>
       r.id === activeRouter.id
         ? {
@@ -104,10 +105,10 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
             osVersion,
             connectionMethod,
             host: sanitizeInput(host) || '192.168.88.1',
-            port: Number(port) || (osVersion === 'v7' ? 443 : 8728),
+            port: resolvedPort,
             apiUser: sanitizeInput(apiUser) || 'mikrocore-api',
             apiPassword,
-            useHttps: osVersion === 'v7',
+            useHttps: osVersion === 'v7' && resolvedPort !== 80,
           }
         : r
     );
@@ -137,10 +138,10 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
       osVersion: 'v7',
       connectionMethod: 'local_ip',
       host: `192.168.${88 + routers.length}.1`,
-      port: 443,
+      port: 80,
       apiUser: `mikrocore_${user.username}`,
       apiPassword: 'MikroCore@2026',
-      useHttps: true,
+      useHttps: false,
       status: mode === 'sandbox' ? 'sandbox' : 'disconnected',
     };
     const next = [...routers, newRouter];
@@ -163,6 +164,7 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
     setTesting(true);
     setTestResult(null);
 
+    const resolvedPort = Number(port) || (osVersion === 'v7' ? 80 : 8728);
     const candidate: RouterProfile = {
       ...activeRouter,
       name,
@@ -170,10 +172,10 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
       osVersion,
       connectionMethod,
       host,
-      port,
+      port: resolvedPort,
       apiUser,
       apiPassword,
-      useHttps: osVersion === 'v7',
+      useHttps: osVersion === 'v7' && resolvedPort !== 80,
     };
 
     if (mode === 'sandbox') {
@@ -386,7 +388,7 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
                   type="button"
                   onClick={() => {
                     setOsVersion(ver);
-                    setPort(ver === 'v7' ? 443 : 8728);
+                    setPort(ver === 'v7' ? 80 : 8728);
                   }}
                   className={`rounded-xl border py-2.5 text-xs font-bold transition cursor-pointer ${
                     osVersion === ver

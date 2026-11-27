@@ -78,16 +78,16 @@ test('One-Line Connector separates v7 REST SSL + ports 443,80 + www + auto-SSL/D
   assert.equal(v6Conn.includes('/ip service set api disabled=no port=8728'), true);
 });
 
-test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge with X-Target-Url', async () => {
+test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge with http:// on port 80 and https:// on port 443', async () => {
   const originalFetch = globalThis.fetch;
-  let capturedUrl = '';
-  let capturedHeaders: Record<string, string> = {};
-  let capturedMethod = '';
+  const captured: Array<{ url: string; method: string; headers: Record<string, string> }> = [];
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    capturedUrl = String(input);
-    capturedMethod = init?.method || 'GET';
-    capturedHeaders = (init?.headers as Record<string, string>) || {};
+    captured.push({
+      url: String(input),
+      method: init?.method || 'GET',
+      headers: (init?.headers as Record<string, string>) || {},
+    });
     return new Response(JSON.stringify({ 'cpu-load': 12 }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -95,7 +95,25 @@ test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge wit
   }) as typeof fetch;
 
   try {
-    const result = await executeRouterOsV7Rest(
+    const res80 = await executeRouterOsV7Rest(
+      {
+        id: 'r1',
+        name: 'Core',
+        model: 'RB5009',
+        osVersion: 'v7',
+        connectionMethod: 'cloud_ddns',
+        host: 'abc123.sn.mynetname.net',
+        port: 80,
+        apiUser: 'mikro',
+        apiPassword: 'pass',
+        useHttps: true,
+        status: 'disconnected',
+      },
+      '/system/resource',
+      'GET'
+    );
+
+    const res443 = await executeRouterOsV7Rest(
       {
         id: 'r1',
         name: 'Core',
@@ -113,12 +131,14 @@ test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge wit
       'GET'
     );
 
-    assert.equal(result.ok, true);
-    assert.equal(capturedUrl, MIKROCORE_BRIDGE_URL);
-    assert.equal(capturedMethod, 'GET');
-    assert.equal(capturedHeaders['X-Target-Url'], 'https://abc123.sn.mynetname.net:443/rest/system/resource');
-    assert.equal(capturedHeaders.Authorization, `Basic ${btoa('mikro:pass')}`);
-    assert.equal(capturedHeaders['Content-Type'], 'application/json');
+    assert.equal(res80.ok, true);
+    assert.equal(res443.ok, true);
+    assert.equal(captured[0].url, MIKROCORE_BRIDGE_URL);
+    assert.equal(captured[0].method, 'GET');
+    assert.equal(captured[0].headers['X-Target-Url'], 'http://abc123.sn.mynetname.net:80/rest/system/resource');
+    assert.equal(captured[0].headers.Authorization, `Basic ${btoa('mikro:pass')}`);
+    assert.equal(captured[0].headers['Content-Type'], 'application/json');
+    assert.equal(captured[1].headers['X-Target-Url'], 'https://abc123.sn.mynetname.net:443/rest/system/resource');
   } finally {
     globalThis.fetch = originalFetch;
   }
