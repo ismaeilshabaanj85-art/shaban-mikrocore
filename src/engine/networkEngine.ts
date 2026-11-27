@@ -174,30 +174,15 @@ export function generateOneLineConnector(params: {
   const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 443 : 8728)));
 
   const userCmd = `/user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive; /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
+  const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${port},80 action=accept place-before=0 comment="Allow MikroCore API (${safeTenant})"`;
 
   if (params.osVersion === 'v7') {
-    const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${port} action=accept place-before=0 comment="Shaban MikroCore API Port"`;
-    if (params.enableCloudDdns) {
-      return [
-        userCmd,
-        fwCmd,
-        `/ip cloud set ddns-enabled=yes update-time=yes`,
-        `/ip cloud force-update`,
-        `:delay 3s`,
-        `:local dns [/ip cloud get dns-name]`,
-        `/certificate enable-ssl-certificate dns-name=$dns`,
-        `/ip service set www-ssl disabled=no port=${port}`,
-        `/ip service set api-ssl disabled=no`,
-        `:put ("CLOUD_DOMAIN=" . $dns)`,
-      ].join('; ');
-    }
-    const localSslCmd = `/certificate add name=mikrocore-ca common-name=mikrocore.local key-usage=key-cert-sign,crl-sign; /certificate sign mikrocore-ca; /certificate add name=mikrocore-srv common-name=mikrocore.local; /certificate sign mikrocore-srv ca=mikrocore-ca; /ip service set www-ssl disabled=no certificate=mikrocore-srv port=${port}; /ip service set api-ssl disabled=no certificate=mikrocore-srv`;
-    return `${userCmd}; ${fwCmd}; ${localSslCmd}`;
+    const cloudAndSslCmd = `/ip service set www disabled=no port=80; /ip cloud set ddns-enabled=yes update-time=yes; :delay 3s; :local dns [/ip cloud get dns-name]; /certificate enable-ssl-certificate dns-name=$dns; :delay 6s; /ip service set www-ssl disabled=no certificate=letsencrypt-autogen_* port=${port}; /ip service set api-ssl disabled=no certificate=letsencrypt-autogen_*; :put "=== COPY THIS DOMAIN TO APP ==="; :put $dns`;
+    return `${userCmd}; ${fwCmd}; ${cloudAndSslCmd}`;
   }
 
-  // RouterOS v6 strictly separated syntax (no rest-api policy)
   const v6UserCmd = `/user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
-  const v6SvcCmd = `/ip service set api disabled=no port=${port}; /ip service set www disabled=no`;
+  const v6SvcCmd = `/ip service set api disabled=no port=${port}; /ip service set www disabled=no; ${fwCmd}`;
   const v6CloudCmd = params.enableCloudDdns
     ? `; /ip cloud set ddns-enabled=yes update-time=yes; :put [/ip cloud get dns-name]`
     : '';
