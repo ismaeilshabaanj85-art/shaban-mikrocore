@@ -7,6 +7,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
+    base: '/shaban-mikrocore/',
     plugins: [
       react(),
       tailwindcss(),
@@ -14,7 +15,7 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
-          id: '/',
+          id: '/shaban-mikrocore/',
           name: 'Shaban MikroCore | شعبان مايكروكور',
           short_name: 'MikroCore',
           description: 'Enterprise Cyber-NOC Engineering Platform for MikroTik RouterOS v6/v7, RADIUS Vouchers, Multi-WAN PCC, Starlink, and Cisco IOS.',
@@ -22,25 +23,25 @@ export default defineConfig(() => {
           background_color: '#050A18',
           display: 'standalone',
           orientation: 'any',
-          start_url: '/',
-          scope: '/',
+          start_url: '/shaban-mikrocore/',
+          scope: '/shaban-mikrocore/',
           dir: 'rtl',
           lang: 'ar',
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: '/shaban-mikrocore/pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: '/shaban-mikrocore/pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: '/shaban-mikrocore/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -60,7 +61,7 @@ export default defineConfig(() => {
                   maxAgeSeconds: 60 * 60 * 24 * 365,
                 },
                 cacheableResponse: {
-                  statuses: [0, 200],
+                  statuses:,
                 },
               },
             },
@@ -74,7 +75,7 @@ export default defineConfig(() => {
                   maxAgeSeconds: 60 * 60 * 24 * 365,
                 },
                 cacheableResponse: {
-                  statuses: [0, 200],
+                  statuses:,
                 },
               },
             },
@@ -85,8 +86,6 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
-      // Copies src/assets into dist/ so root-relative URLs like
-      // "/src/assets/images/..." still resolve in production builds.
       {
         name: 'copy-unbundled-src-assets',
         apply: 'build',
