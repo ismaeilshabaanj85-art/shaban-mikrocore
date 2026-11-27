@@ -77,6 +77,7 @@ export default function App() {
     return existing?.role === 'superadmin' ? 'admin' : 'noc';
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [pendingSandboxScript, setPendingSandboxScript] = useState('');
   const [promoteNotice, setPromoteNotice] = useState('');
@@ -314,8 +315,13 @@ export default function App() {
         onChangeMode={setMode}
         activeRouter={activeRouter}
         user={user}
+        mobileMenuOpen={mobileMenuOpen}
+        onToggleMobileMenu={() => setMobileMenuOpen((o) => !o)}
         onOpenVault={() => setVaultOpen(true)}
-        onOpenAdmin={() => setActiveModule('admin')}
+        onOpenAdmin={() => {
+          setActiveModule('admin');
+          setMobileMenuOpen(false);
+        }}
         onLogout={handleLogout}
       />
 
@@ -326,10 +332,12 @@ export default function App() {
           onSelectModule={setActiveModule}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+          mobileOpen={mobileMenuOpen}
+          onCloseMobile={() => setMobileMenuOpen(false)}
           user={user}
         />
 
-        <main className="flex-1 min-w-0 p-4 sm:p-6 pb-24 md:pb-8 overflow-x-hidden">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 pb-8 overflow-x-hidden">
           <div className="mx-auto max-w-6xl space-y-4">
             {promoteNotice && (
               <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-xs font-semibold text-emerald-200">

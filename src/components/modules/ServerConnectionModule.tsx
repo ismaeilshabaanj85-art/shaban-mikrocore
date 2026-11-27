@@ -234,8 +234,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
         ok: false,
         message:
           lang === 'ar'
-            ? `تعذر الوصول المباشر من المتصفح (${res.error || res.status}). تأكد من أن الجهاز على نفس الشبكة ومن لصق سكربت التفعيل.`
-            : `Direct browser fetch unreachable (${res.error || res.status}). Ensure LAN/HTTPS access and run the One-Line Connector script.`,
+            ? `تعذر الوصول إلى الراوتر عبر الجسر السحابي (${res.error || res.status}). تأكد من لصق سكربت الربط ومن تفعيل النطاق العام/Cloud DDNS.`
+            : `Router unreachable via Cloud Bridge (${res.error || res.status}). Ensure the One-Line Connector script was run and Cloud DDNS is reachable.`,
       });
     }
   };
@@ -264,8 +264,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
           </h2>
           <p className="mt-1 text-xs text-slate-400">
             {lang === 'ar'
-              ? 'اربط راوتر MikroTik عبر IP محلي (ستارلينك)، IP ثابت، أو MikroTik Cloud DDNS مع عزل كامل لبياناتك.'
-              : 'Connect MikroTik via Local Starlink IP, Static Public IP, or Cloud DDNS with isolated tenant storage.'}
+              ? 'اربط راوتر MikroTik عبر IP محلي (ستارلينك)، IP ثابت، أو MikroTik Cloud DDNS مع تمرير آمن عبر الجسر السحابي.'
+              : 'Connect MikroTik via Local Starlink IP, Static Public IP, or Cloud DDNS routed securely through the Cloud Bridge.'}
           </p>
         </div>
 
@@ -515,8 +515,8 @@ export const ServerConnectionModule: React.FC<ServerConnectionModuleProps> = ({
             <Globe className="h-3.5 w-3.5 text-cyan-400" />
             <span>
               {lang === 'ar'
-                ? 'تفعيل Cloud DDNS + فتح البورت 443 + شهادة SSL تلقائية وطباعة النطاق'
-                : 'Auto-open Port 443, Cloud DDNS, free SSL & print domain'}
+                ? 'فتح منفذي 443,80 + تفعيل www و Cloud DDNS + شهادة SSL تلقائية وطباعة النطاق'
+                : 'Open ports 443,80, enable www & Cloud DDNS, free SSL & print domain'}
             </span>
           </label>
 

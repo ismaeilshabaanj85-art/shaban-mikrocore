@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Activity,
   Archive,
@@ -16,6 +16,7 @@ import {
   TerminalSquare,
   Ticket,
   Wand2,
+  X,
 } from 'lucide-react';
 import { Language, ModuleId, SessionUser } from '../types/mikrocore';
 import { useT } from '../i18n/translations';
@@ -26,6 +27,8 @@ interface SidebarNavProps {
   onSelectModule: (id: ModuleId) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
   user: SessionUser;
 }
 
@@ -35,9 +38,20 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   onSelectModule,
   collapsed,
   onToggleCollapse,
+  mobileOpen,
+  onCloseMobile,
   user,
 }) => {
   const t = useT(lang);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseMobile();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileOpen, onCloseMobile]);
 
   const items: Array<{ id: ModuleId; label: string; shortLabel: string; icon: React.ReactNode }> = [
     {
@@ -129,16 +143,35 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
     });
   }
 
+  const handleSelect = (id: ModuleId) => {
+    onSelectModule(id);
+    onCloseMobile();
+  };
+
+  const closedTranslateClass = lang === 'ar' ? 'translate-x-full' : '-translate-x-full';
+
   return (
     <>
-      {/* Desktop Collapsible Sidebar (RTL right / LTR left) */}
+      {/* Mobile / Tablet Light Dark Backdrop (< 1024px) */}
+      {mobileOpen && (
+        <div
+          onClick={onCloseMobile}
+          aria-hidden="true"
+          className="no-print fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm transition-opacity duration-300 lg:hidden"
+        />
+      )}
+
+      {/* Slide-over Drawer (< 1024px) & Collapsible Sidebar (>= 1024px) */}
       <aside
-        className={`no-print hidden md:flex flex-col border-e border-cyan-500/20 bg-[#060D20]/90 backdrop-blur-xl transition-all duration-200 shrink-0 ${
-          collapsed ? 'w-20' : 'w-64'
-        }`}
+        aria-label="Sidebar Navigation"
+        className={`no-print fixed inset-y-0 start-0 z-50 flex flex-col border-e border-cyan-500/25 bg-[#060D20]/98 backdrop-blur-2xl shadow-2xl transition-all duration-300 ease-out w-72 max-w-[85vw] shrink-0 lg:static lg:z-auto lg:bg-[#060D20]/90 lg:shadow-none ${
+          mobileOpen
+            ? 'translate-x-0 pointer-events-auto'
+            : `${closedTranslateClass} pointer-events-none lg:translate-x-0 lg:pointer-events-auto`
+        } ${collapsed ? 'lg:w-20' : 'lg:w-64'}`}
       >
         <div className="flex items-center justify-between border-b border-cyan-500/15 px-4 py-3">
-          {!collapsed && (
+          {(!collapsed || mobileOpen) && (
             <div className="min-w-0">
               <p className="truncate text-xs font-bold text-white">{user.displayName}</p>
               <p className="truncate font-mono text-[10px] text-cyan-400/80" dir="ltr">
@@ -146,10 +179,22 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
               </p>
             </div>
           )}
+
+          {/* Close button on Mobile Drawer (< lg) */}
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            className="lg:hidden rounded-lg border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-300 hover:border-cyan-400/50 hover:text-cyan-300 cursor-pointer"
+            aria-label={lang === 'ar' ? 'إغلاق القائمة' : 'Close menu'}
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {/* Collapse/Expand button on Desktop (>= lg) */}
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="rounded-lg border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-300 hover:border-cyan-400/50 hover:text-cyan-300 cursor-pointer mx-auto"
+            className="hidden lg:inline-flex rounded-lg border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-300 hover:border-cyan-400/50 hover:text-cyan-300 cursor-pointer mx-auto"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {lang === 'ar' ? (
@@ -169,59 +214,36 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => onSelectModule(item.id)}
+                onClick={() => handleSelect(item.id)}
                 title={item.label}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-bold transition cursor-pointer ${
+                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 lg:py-2 text-xs font-bold transition cursor-pointer ${
                   active
                     ? 'border border-cyan-400/45 bg-cyan-500/18 text-cyan-100 shadow-[0_0_20px_rgba(0,229,255,0.12)]'
                     : 'border border-transparent text-slate-300 hover:border-cyan-500/20 hover:bg-slate-900/70 hover:text-white'
-                } ${collapsed ? 'justify-center px-2' : ''}`}
+                } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
               >
                 <span className={active ? 'text-cyan-300' : 'text-slate-400'}>{item.icon}</span>
-                {!collapsed && <span className="truncate whitespace-nowrap">{item.label}</span>}
+                <span className={`truncate whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
+                  {item.label}
+                </span>
               </button>
             );
           })}
         </nav>
 
-        {!collapsed && (
-          <div className="border-t border-cyan-500/15 p-3.5 text-[11px] text-slate-400">
-            <p className="font-semibold text-slate-300">
-              {lang === 'ar' ? 'الحد المسموح للراوترات' : 'Router Quota'}
-            </p>
-            <p className="mt-0.5 font-mono text-cyan-300 tabular-nums">
-              {user.maxRouters} {lang === 'ar' ? 'أجهزة' : 'Devices'}
-            </p>
-          </div>
-        )}
-      </aside>
-
-      {/* Mobile Floating Smart Bottom Navigation Bar (horizontally scrollable for all 14 modules) */}
-      <nav
-        aria-label="Mobile Navigation"
-        className="no-print md:hidden fixed bottom-2 inset-x-2 z-40 rounded-2xl border border-cyan-500/30 bg-[#071026]/95 px-2 py-1.5 shadow-[0_8px_32px_rgba(0,0,0,0.65)] backdrop-blur-xl overflow-x-auto"
-      >
-        <div className="flex items-center gap-1 min-w-max">
-          {items.map((item) => {
-            const active = activeModule === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onSelectModule(item.id)}
-                className={`flex flex-col items-center justify-center gap-0.5 rounded-xl py-1.5 px-2.5 text-[10px] font-bold transition cursor-pointer shrink-0 ${
-                  active
-                    ? 'bg-cyan-500/20 text-cyan-200'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {item.icon}
-                <span className="whitespace-nowrap">{item.shortLabel}</span>
-              </button>
-            );
-          })}
+        <div
+          className={`border-t border-cyan-500/15 p-3.5 text-[11px] text-slate-400 ${
+            collapsed ? 'lg:hidden' : ''
+          }`}
+        >
+          <p className="font-semibold text-slate-300">
+            {lang === 'ar' ? 'الحد المسموح للراوترات' : 'Router Quota'}
+          </p>
+          <p className="mt-0.5 font-mono text-cyan-300 tabular-nums">
+            {user.maxRouters} {lang === 'ar' ? 'أجهزة' : 'Devices'}
+          </p>
         </div>
-      </nav>
+      </aside>
     </>
   );
 };

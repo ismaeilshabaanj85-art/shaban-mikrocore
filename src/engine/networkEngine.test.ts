@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MIKROCORE_BRIDGE_URL,
   PRESET_SPEED_PROFILES,
+  executeRouterOsV7Rest,
   generateAntiNetcutSecurityShield,
   generateAutoRollbackGuard,
   generateCiscoIosCli,
@@ -47,7 +49,7 @@ test('Auto-Rollback Safety Guard creates 60s scheduler and backup', () => {
   assert.equal(guard.includes('MikroCore_AutoRollback'), true);
 });
 
-test('One-Line Connector separates v7 REST SSL + auto-SSL/DDNS/firewall from v6 API', () => {
+test('One-Line Connector separates v7 REST SSL + ports 443,80 + www + auto-SSL/DDNS from v6 API', () => {
   const v7Conn = generateOneLineConnector({
     osVersion: 'v7',
     tenantUuid: 'tenant-123',
@@ -64,7 +66,8 @@ test('One-Line Connector separates v7 REST SSL + auto-SSL/DDNS/firewall from v6 
     enableCloudDdns: false,
     port: 8728,
   });
-  assert.equal(v7Conn.includes('/ip firewall filter add chain=input protocol=tcp dst-port=443 action=accept place-before=0'), true);
+  assert.equal(v7Conn.includes('/ip firewall filter add chain=input protocol=tcp dst-port=443,80 action=accept place-before=0'), true);
+  assert.equal(v7Conn.includes('/ip service set www disabled=no port=80'), true);
   assert.equal(v7Conn.includes('/ip cloud set ddns-enabled=yes'), true);
   assert.equal(v7Conn.includes('/ip cloud force-update'), true);
   assert.equal(v7Conn.includes('/certificate enable-ssl-certificate dns-name=$dns'), true);
@@ -73,6 +76,52 @@ test('One-Line Connector separates v7 REST SSL + auto-SSL/DDNS/firewall from v6 
   assert.equal(v7Conn.includes(':put ("CLOUD_DOMAIN=" . $dns)'), true);
   assert.equal(v6Conn.includes('www-ssl'), false);
   assert.equal(v6Conn.includes('/ip service set api disabled=no port=8728'), true);
+});
+
+test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge with X-Target-Url', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
+  let capturedMethod = '';
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedMethod = init?.method || 'GET';
+    capturedHeaders = (init?.headers as Record<string, string>) || {};
+    return new Response(JSON.stringify({ 'cpu-load': 12 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await executeRouterOsV7Rest(
+      {
+        id: 'r1',
+        name: 'Core',
+        model: 'RB5009',
+        osVersion: 'v7',
+        connectionMethod: 'cloud_ddns',
+        host: 'abc123.sn.mynetname.net',
+        port: 443,
+        apiUser: 'mikro',
+        apiPassword: 'pass',
+        useHttps: true,
+        status: 'disconnected',
+      },
+      '/system/resource',
+      'GET'
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(capturedUrl, MIKROCORE_BRIDGE_URL);
+    assert.equal(capturedMethod, 'GET');
+    assert.equal(capturedHeaders['X-Target-Url'], 'https://abc123.sn.mynetname.net:443/rest/system/resource');
+    assert.equal(capturedHeaders.Authorization, `Basic ${btoa('mikro:pass')}`);
+    assert.equal(capturedHeaders['Content-Type'], 'application/json');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('Zero-Touch Bootstrap includes WAN, Bridge, DHCP, NAT, and Hotspot/PPPoE', () => {

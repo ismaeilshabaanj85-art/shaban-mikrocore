@@ -115,17 +115,68 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
   useEffect(() => {
     const interval = setInterval(async () => {
       if (mode === 'live' && activeRouter.osVersion === 'v7') {
-        const res = await executeRouterOsV7Rest(activeRouter, '/system/resource', 'GET');
-        if (res.ok && res.data && typeof res.data === 'object') {
+        const [resResult, healthResult, hotspotResult, pppResult] = await Promise.allSettled([
+          executeRouterOsV7Rest(activeRouter, '/system/resource', 'GET'),
+          executeRouterOsV7Rest(activeRouter, '/system/health', 'GET'),
+          executeRouterOsV7Rest(activeRouter, '/ip/hotspot/active', 'GET'),
+          executeRouterOsV7Rest(activeRouter, '/ppp/active', 'GET'),
+        ]);
+
+        const res = resResult.status === 'fulfilled' ? resResult.value : null;
+        if (res?.ok && res.data && typeof res.data === 'object') {
           const d = res.data as Record<string, string | number>;
-          const cpu = Number(d['cpu-load']) || 15;
+          const cpu = Number(d['cpu-load']) || 0;
           const totalMem = Number(d['total-memory']) || 1024;
           const freeMem = Number(d['free-memory']) || 512;
           const usedPct = Math.round(((totalMem - freeMem) / totalMem) * 100);
+          const totalMb = Math.round(totalMem / (1024 * 1024));
+          const usedMb = Math.round((totalMem - freeMem) / (1024 * 1024));
+
+          let nextTemp: number | undefined;
+          let nextVolt: number | undefined;
+          if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
+            const hData = healthResult.value.data;
+            if (Array.isArray(hData)) {
+              for (const item of hData as Array<Record<string, string | number>>) {
+                if (item.name === 'temperature' || item.name === 'cpu-temperature') {
+                  const val = Number(item.value);
+                  if (!Number.isNaN(val)) nextTemp = val;
+                } else if (item.name === 'voltage') {
+                  const val = Number(item.value);
+                  if (!Number.isNaN(val)) nextVolt = val;
+                }
+              }
+            } else if (hData && typeof hData === 'object') {
+              const hObj = hData as Record<string, string | number>;
+              if (hObj.temperature !== undefined) nextTemp = Number(hObj.temperature);
+              if (hObj.voltage !== undefined) nextVolt = Number(hObj.voltage);
+            }
+          }
+
+          const hotspotCount =
+            hotspotResult.status === 'fulfilled' &&
+            hotspotResult.value.ok &&
+            Array.isArray(hotspotResult.value.data)
+              ? hotspotResult.value.data.length
+              : undefined;
+
+          const pppCount =
+            pppResult.status === 'fulfilled' &&
+            pppResult.value.ok &&
+            Array.isArray(pppResult.value.data)
+              ? pppResult.value.data.length
+              : undefined;
+
           setTelemetry((prev) => ({
             ...prev,
             cpuLoad: cpu,
             ramUsedPercent: usedPct,
+            ramTotalMb: totalMb > 0 ? totalMb : prev.ramTotalMb,
+            ramUsedMb: usedMb >= 0 ? usedMb : prev.ramUsedMb,
+            temperatureC: nextTemp ?? prev.temperatureC,
+            voltageV: nextVolt ?? prev.voltageV,
+            activeHotspot: hotspotCount ?? prev.activeHotspot,
+            activePppoe: pppCount ?? prev.activePppoe,
             uptime: String(d.uptime || prev.uptime),
           }));
           return;

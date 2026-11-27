@@ -174,20 +174,40 @@ export function generateOneLineConnector(params: {
   const port = Math.max(80, Math.min(65535, Number(params.port) || (params.osVersion === 'v7' ? 443 : 8728)));
 
   const userCmd = `/user group add name=mikrocore-grp policy=read,write,api,rest-api,test,sensitive; /user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
-  const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${port},80 action=accept place-before=0 comment="Allow MikroCore API (${safeTenant})"`;
 
   if (params.osVersion === 'v7') {
-    const cloudAndSslCmd = `/ip service set www disabled=no port=80; /ip cloud set ddns-enabled=yes update-time=yes; :delay 3s; :local dns [/ip cloud get dns-name]; /certificate enable-ssl-certificate dns-name=$dns; :delay 6s; /ip service set www-ssl disabled=no certificate=letsencrypt-autogen_* port=${port}; /ip service set api-ssl disabled=no certificate=letsencrypt-autogen_*; :put "=== COPY THIS DOMAIN TO APP ==="; :put $dns`;
-    return `${userCmd}; ${fwCmd}; ${cloudAndSslCmd}`;
+    const dstPorts = port === 443 || port === 80 ? '443,80' : `${port},443,80`;
+    const fwCmd = `/ip firewall filter add chain=input protocol=tcp dst-port=${dstPorts} action=accept place-before=0 comment="Shaban MikroCore API Port"`;
+    const wwwCmd = `/ip service set www disabled=no port=80`;
+    if (params.enableCloudDdns) {
+      return [
+        userCmd,
+        fwCmd,
+        wwwCmd,
+        `/ip cloud set ddns-enabled=yes update-time=yes`,
+        `/ip cloud force-update`,
+        `:delay 3s`,
+        `:local dns [/ip cloud get dns-name]`,
+        `/certificate enable-ssl-certificate dns-name=$dns`,
+        `/ip service set www-ssl disabled=no port=${port}`,
+        `/ip service set api-ssl disabled=no`,
+        `:put ("CLOUD_DOMAIN=" . $dns)`,
+      ].join('; ');
+    }
+    const localSslCmd = `/certificate add name=mikrocore-ca common-name=mikrocore.local key-usage=key-cert-sign,crl-sign; /certificate sign mikrocore-ca; /certificate add name=mikrocore-srv common-name=mikrocore.local; /certificate sign mikrocore-srv ca=mikrocore-ca; /ip service set www-ssl disabled=no certificate=mikrocore-srv port=${port}; /ip service set api-ssl disabled=no certificate=mikrocore-srv`;
+    return `${userCmd}; ${fwCmd}; ${wwwCmd}; ${localSslCmd}`;
   }
 
+  // RouterOS v6 strictly separated syntax (no rest-api policy)
   const v6UserCmd = `/user add name="${safeUser}" password="${safePass}" group=full comment="Tenant:${safeTenant}"`;
-  const v6SvcCmd = `/ip service set api disabled=no port=${port}; /ip service set www disabled=no; ${fwCmd}`;
+  const v6SvcCmd = `/ip service set api disabled=no port=${port}; /ip service set www disabled=no`;
   const v6CloudCmd = params.enableCloudDdns
     ? `; /ip cloud set ddns-enabled=yes update-time=yes; :put [/ip cloud get dns-name]`
     : '';
   return `${v6UserCmd}; ${v6SvcCmd}${v6CloudCmd}`;
 }
+
+export const MIKROCORE_BRIDGE_URL = 'https://mikrocore-bridge.ismaeilshabaanj85.workers.dev';
 
 export interface RestApiResult {
   ok: boolean;
@@ -198,7 +218,8 @@ export interface RestApiResult {
 }
 
 /**
- * Functional RouterOS v7 REST API client using Fetch + Basic Auth + 60s Auto-Rollback script prep.
+ * Functional RouterOS v7 REST API client routed securely through the Cloudflare Worker Bridge
+ * using X-Target-Url + Basic Auth + 60s Auto-Rollback script prep.
  */
 export async function executeRouterOsV7Rest(
   router: RouterProfile,
@@ -208,19 +229,20 @@ export async function executeRouterOsV7Rest(
 ): Promise<RestApiResult> {
   const rollbackScript = generateAutoRollbackGuard(router.osVersion, 60);
   const cleanHost = sanitizeCliToken(router.host, '192.168.88.1');
-  const proto = router.useHttps ? 'https' : 'http';
+  const proto = router.useHttps === false ? 'http' : 'https';
   const portPart = router.port ? `:${router.port}` : '';
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${proto}://${cleanHost}${portPart}/rest${normalizedEndpoint}`;
+  const targetUrl = `${proto}://${cleanHost}${portPart}/rest${normalizedEndpoint}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
 
   try {
     const token = btoa(`${router.apiUser}:${router.apiPassword}`);
-    const response = await fetch(url, {
+    const response = await fetch(MIKROCORE_BRIDGE_URL, {
       method,
       headers: {
+        'X-Target-Url': targetUrl,
         Authorization: `Basic ${token}`,
         'Content-Type': 'application/json',
       },
@@ -248,7 +270,7 @@ export async function executeRouterOsV7Rest(
       ok: false,
       status: 0,
       data: null,
-      error: err instanceof Error ? err.message : 'Network unreachable or CORS/Self-Signed SSL blocked by browser',
+      error: err instanceof Error ? err.message : 'Cloudflare Worker Bridge unreachable',
       rollbackScript,
     };
   }

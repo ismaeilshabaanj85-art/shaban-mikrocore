@@ -2,5 +2,7 @@
   "name": "Shaban MikroCore | شعبان مايكروكور",
   "description": "Enterprise Cyber-NOC Engineering Platform for MikroTik RouterOS v6/v7, RADIUS Vouchers, Multi-WAN PCC, Starlink Optimization, and Cisco IOS.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

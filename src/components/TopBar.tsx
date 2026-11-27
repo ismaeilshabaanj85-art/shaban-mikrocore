@@ -3,9 +3,11 @@ import {
   Archive,
   Globe,
   LogOut,
+  Menu,
   Radio,
   Router,
   Shield,
+  X,
 } from 'lucide-react';
 import {
   AppMode,
@@ -24,6 +26,8 @@ interface TopBarProps {
   onChangeMode: (mode: AppMode) => void;
   activeRouter: RouterProfile;
   user: SessionUser;
+  mobileMenuOpen: boolean;
+  onToggleMobileMenu: () => void;
   onOpenVault: () => void;
   onOpenAdmin: () => void;
   onLogout: () => void;
@@ -36,6 +40,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onChangeMode,
   activeRouter,
   user,
+  mobileMenuOpen,
+  onToggleMobileMenu,
   onOpenVault,
   onOpenAdmin,
   onLogout,
@@ -66,8 +72,18 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header className="no-print sticky top-0 z-40 border-b border-cyan-500/25 bg-[#050A18]/92 backdrop-blur-xl shadow-[0_4px_24px_rgba(0,0,0,0.45)]">
       <div className="flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 py-2.5">
-        {/* Zone 1: Custom Geometric Brand + Illuminated Developer Badge */}
+        {/* Zone 1: Mobile Hamburger Drawer Toggle + Brand + Developer Badge */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={onToggleMobileMenu}
+            aria-label={lang === 'ar' ? 'فتح القائمة الجانبية' : 'Toggle navigation menu'}
+            aria-expanded={mobileMenuOpen}
+            className="lg:hidden flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-400/40 bg-[#0B142B] text-cyan-200 shadow-[0_0_16px_rgba(0,229,255,0.18)] transition hover:border-cyan-300 hover:bg-cyan-500/15 cursor-pointer"
+          >
+            {mobileMenuOpen ? <X className="h-4 w-4 sm:h-5 sm:w-5" /> : <Menu className="h-4 w-4 sm:h-5 sm:w-5" />}
+          </button>
+
           <button
             type="button"
             onClick={handleLogoTap}
