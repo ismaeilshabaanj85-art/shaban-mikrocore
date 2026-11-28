@@ -2,17 +2,27 @@ import React, { useEffect } from 'react';
 import {
   Activity,
   Archive,
+  BarChart3,
   BookOpen,
   ChevronLeft,
   ChevronRight,
   Coins,
+  Construction,
   Cpu,
   FlaskConical,
+  Gauge,
+  Globe,
+  KeyRound,
   LayoutTemplate,
+  Link2,
   Network,
   RadioTower,
+  Route,
+  SatelliteDish,
   Server,
   Shield,
+  ShieldAlert,
+  ShieldCheck,
   TerminalSquare,
   Ticket,
   Wand2,
@@ -30,6 +40,12 @@ interface SidebarNavProps {
   mobileOpen: boolean;
   onCloseMobile: () => void;
   user: SessionUser;
+}
+
+interface NavItem {
+  id: ModuleId;
+  label: string;
+  icon: React.ReactNode;
 }
 
 export const SidebarNav: React.FC<SidebarNavProps> = ({
@@ -53,92 +69,44 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mobileOpen, onCloseMobile]);
 
-  const items: Array<{ id: ModuleId; label: string; shortLabel: string; icon: React.ReactNode }> = [
-    {
-      id: 'noc',
-      label: t.navNoc,
-      shortLabel: lang === 'ar' ? 'القيادة' : 'NOC',
-      icon: <Activity className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'connection',
-      label: t.navConnection,
-      shortLabel: lang === 'ar' ? 'الربط' : 'Link',
-      icon: <Server className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'wizard',
-      label: t.navWizard,
-      shortLabel: lang === 'ar' ? 'المعالج' : 'Setup',
-      icon: <Wand2 className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'radius',
-      label: t.navRadius,
-      shortLabel: lang === 'ar' ? 'البطاقات' : 'RADIUS',
-      icon: <Ticket className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'pcc_security',
-      label: t.navPccSecurity,
-      shortLabel: lang === 'ar' ? 'الحماية' : 'PCC',
-      icon: <Network className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'cisco',
-      label: t.navCisco,
-      shortLabel: lang === 'ar' ? 'سيسكو' : 'Cisco',
-      icon: <Cpu className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'troubleshooter',
-      label: t.navTroubleshooter,
-      shortLabel: lang === 'ar' ? 'التيرمينال' : 'Terminal',
-      icon: <TerminalSquare className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'portal',
-      label: t.navPortal,
-      shortLabel: lang === 'ar' ? 'البوابة' : 'Portal',
-      icon: <LayoutTemplate className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'finance',
-      label: t.navFinance,
-      shortLabel: lang === 'ar' ? 'المالية' : 'Finance',
-      icon: <Coins className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'vault',
-      label: t.navVault,
-      shortLabel: lang === 'ar' ? 'الخزنة' : 'Vault',
-      icon: <Archive className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'towers',
-      label: t.navTowers,
-      shortLabel: lang === 'ar' ? 'الأبراج' : 'Towers',
-      icon: <RadioTower className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'sandbox',
-      label: t.navSandbox,
-      shortLabel: lang === 'ar' ? 'المحاكي' : 'Sandbox',
-      icon: <FlaskConical className="h-4 w-4 shrink-0" />,
-    },
-    {
-      id: 'guide',
-      label: t.navGuide,
-      shortLabel: lang === 'ar' ? 'الدليل' : 'Guide',
-      icon: <BookOpen className="h-4 w-4 shrink-0" />,
-    },
+  const mikrotikItems: NavItem[] = [
+    { id: 'noc', label: t.navNoc, icon: <Activity className="h-4 w-4 shrink-0" /> },
+    { id: 'connection', label: t.navConnection, icon: <Server className="h-4 w-4 shrink-0" /> },
+    { id: 'wizard', label: t.navWizard, icon: <Wand2 className="h-4 w-4 shrink-0" /> },
+    { id: 'radius', label: t.navRadius, icon: <Ticket className="h-4 w-4 shrink-0" /> },
+    { id: 'pcc_security', label: t.navPccSecurity, icon: <Network className="h-4 w-4 shrink-0" /> },
+    { id: 'troubleshooter', label: t.navTroubleshooter, icon: <TerminalSquare className="h-4 w-4 shrink-0" /> },
+    { id: 'portal', label: t.navPortal, icon: <LayoutTemplate className="h-4 w-4 shrink-0" /> },
+    { id: 'finance', label: t.navFinance, icon: <Coins className="h-4 w-4 shrink-0" /> },
+    { id: 'vault', label: t.navVault, icon: <Archive className="h-4 w-4 shrink-0" /> },
+    { id: 'towers', label: t.navTowers, icon: <RadioTower className="h-4 w-4 shrink-0" /> },
+    // 7 New Enterprise MikroTik Tabs
+    { id: 'public_ip', label: t.navPublicIp, icon: <Globe className="h-4 w-4 shrink-0" /> },
+    { id: 'vpn_l2tp', label: t.navVpnL2tp, icon: <KeyRound className="h-4 w-4 shrink-0" /> },
+    { id: 'starlink_quota', label: t.navStarlinkQuota, icon: <SatelliteDish className="h-4 w-4 shrink-0" /> },
+    { id: 'quota_guard', label: t.navQuotaGuard, icon: <Gauge className="h-4 w-4 shrink-0" /> },
+    { id: 'loop_protect', label: t.navLoopProtect, icon: <ShieldAlert className="h-4 w-4 shrink-0" /> },
+    { id: 'maintenance_mode', label: t.navMaintenanceMode, icon: <Construction className="h-4 w-4 shrink-0" /> },
+    { id: 'daily_report', label: t.navDailyReport, icon: <BarChart3 className="h-4 w-4 shrink-0" /> },
+  ];
+
+  const ciscoItems: NavItem[] = [
+    { id: 'cisco_vlans', label: t.navCiscoVlans, icon: <Cpu className="h-4 w-4 shrink-0" /> },
+    { id: 'cisco_l2', label: t.navCiscoL2, icon: <ShieldCheck className="h-4 w-4 shrink-0" /> },
+    { id: 'cisco_lacp', label: t.navCiscoLacp, icon: <Link2 className="h-4 w-4 shrink-0" /> },
+    { id: 'cisco_routing', label: t.navCiscoRouting, icon: <Route className="h-4 w-4 shrink-0" /> },
+    { id: 'cisco_qos', label: t.navCiscoQos, icon: <Activity className="h-4 w-4 shrink-0" /> },
+  ];
+
+  const systemItems: NavItem[] = [
+    { id: 'sandbox', label: t.navSandbox, icon: <FlaskConical className="h-4 w-4 shrink-0" /> },
+    { id: 'guide', label: t.navGuide, icon: <BookOpen className="h-4 w-4 shrink-0" /> },
   ];
 
   if (user.role === 'superadmin') {
-    items.push({
+    systemItems.push({
       id: 'admin',
       label: t.navAdmin,
-      shortLabel: lang === 'ar' ? 'الإدارة' : 'Admin',
       icon: <Shield className="h-4 w-4 shrink-0 text-amber-400" />,
     });
   }
@@ -150,9 +118,64 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
 
   const closedTranslateClass = lang === 'ar' ? 'translate-x-full' : '-translate-x-full';
 
+  const renderGroup = (header: string, items: NavItem[], accent: 'cyan' | 'emerald' | 'slate') => {
+    const headerColor =
+      accent === 'emerald'
+        ? 'text-emerald-300 border-emerald-500/20'
+        : accent === 'cyan'
+        ? 'text-cyan-300 border-cyan-500/20'
+        : 'text-slate-400 border-slate-800';
+
+    return (
+      <div className="space-y-1">
+        {(!collapsed || mobileOpen) && (
+          <div
+            className={`px-3 pt-2.5 pb-1 text-[10px] font-extrabold tracking-wide border-b ${headerColor}`}
+          >
+            {header}
+          </div>
+        )}
+        {items.map((item) => {
+          const active =
+            activeModule === item.id ||
+            (activeModule === 'cisco' && item.id === 'cisco_vlans');
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => handleSelect(item.id)}
+              title={item.label}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 lg:py-2 text-xs font-bold transition cursor-pointer ${
+                active
+                  ? accent === 'emerald'
+                    ? 'border border-emerald-400/45 bg-emerald-500/18 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.14)]'
+                    : 'border border-cyan-400/45 bg-cyan-500/18 text-cyan-100 shadow-[0_0_20px_rgba(0,229,255,0.12)]'
+                  : 'border border-transparent text-slate-300 hover:border-cyan-500/20 hover:bg-slate-900/70 hover:text-white'
+              } ${collapsed && !mobileOpen ? 'lg:justify-center lg:px-2' : ''}`}
+            >
+              <span
+                className={
+                  active
+                    ? accent === 'emerald'
+                      ? 'text-emerald-300'
+                      : 'text-cyan-300'
+                    : 'text-slate-400'
+                }
+              >
+                {item.icon}
+              </span>
+              <span className={`truncate whitespace-nowrap ${collapsed && !mobileOpen ? 'lg:hidden' : ''}`}>
+                {item.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <>
-      {/* Mobile / Tablet Light Dark Backdrop (< 1024px) */}
       {mobileOpen && (
         <div
           onClick={onCloseMobile}
@@ -161,7 +184,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
         />
       )}
 
-      {/* Slide-over Drawer (< 1024px) & Collapsible Sidebar (>= 1024px) */}
       <aside
         aria-label="Sidebar Navigation"
         className={`no-print fixed inset-y-0 start-0 z-50 flex flex-col border-e border-cyan-500/25 bg-[#060D20]/98 backdrop-blur-2xl shadow-2xl transition-all duration-300 ease-out w-72 max-w-[85vw] shrink-0 lg:static lg:z-auto lg:bg-[#060D20]/90 lg:shadow-none ${
@@ -180,7 +202,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
             </div>
           )}
 
-          {/* Close button on Mobile Drawer (< lg) */}
           <button
             type="button"
             onClick={onCloseMobile}
@@ -190,7 +211,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
             <X className="h-4 w-4" />
           </button>
 
-          {/* Collapse/Expand button on Desktop (>= lg) */}
           <button
             type="button"
             onClick={onToggleCollapse}
@@ -207,28 +227,10 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 p-2.5 overflow-y-auto" aria-label="Primary Navigation">
-          {items.map((item) => {
-            const active = activeModule === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelect(item.id)}
-                title={item.label}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 lg:py-2 text-xs font-bold transition cursor-pointer ${
-                  active
-                    ? 'border border-cyan-400/45 bg-cyan-500/18 text-cyan-100 shadow-[0_0_20px_rgba(0,229,255,0.12)]'
-                    : 'border border-transparent text-slate-300 hover:border-cyan-500/20 hover:bg-slate-900/70 hover:text-white'
-                } ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
-              >
-                <span className={active ? 'text-cyan-300' : 'text-slate-400'}>{item.icon}</span>
-                <span className={`truncate whitespace-nowrap ${collapsed ? 'lg:hidden' : ''}`}>
-                  {item.label}
-                </span>
-              </button>
-            );
-          })}
+        <nav className="flex-1 space-y-3 p-2.5 overflow-y-auto" aria-label="Primary Navigation">
+          {renderGroup(t.navSectionMikroTik, mikrotikItems, 'cyan')}
+          {renderGroup(t.navSectionCisco, ciscoItems, 'emerald')}
+          {renderGroup(t.navSectionSystem, systemItems, 'slate')}
         </nav>
 
         <div

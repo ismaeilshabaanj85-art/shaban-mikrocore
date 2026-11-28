@@ -4,6 +4,7 @@ import {
   BackupVaultItem,
   CaptivePortalConfig,
   CpeDevice,
+  DailyTrafficSample,
   ExchangeRates,
   FinanceTransaction,
   GeneratedVoucher,
@@ -13,6 +14,7 @@ import {
   PppoeSubscriber,
   ResellerAccount,
   RouterProfile,
+  RouterPublicInfo,
   SandboxState,
   SessionUser,
   SpeedProfile,
@@ -25,6 +27,7 @@ import {
   RouterCloudInventory,
   RouterCloudTelemetry,
   cloudFetchRouterInventory,
+  cloudFetchRouterPublicInfo,
   cloudFetchRouterTelemetry,
   cloudFetchSystemBroadcast,
   evaluateRouterAlerts,
@@ -80,6 +83,36 @@ import { BackupVaultModule } from './components/modules/BackupVaultModule';
 import { TowersAutomationModule } from './components/modules/TowersAutomationModule';
 import { UserGuideModule } from './components/modules/UserGuideModule';
 import { SandboxSimulatorModule } from './components/modules/SandboxSimulatorModule';
+import {
+  EnterpriseMikroTikModuleId,
+  MikroTikEnterpriseModules,
+} from './components/modules/MikroTikEnterpriseModules';
+
+function createEmptyDailyTraffic(dateYmd: string = new Date().toISOString().slice(0, 10)): DailyTrafficSample {
+  return {
+    dateYmd,
+    downloadBytes: 0,
+    uploadBytes: 0,
+    peakRxMbps: 0,
+    peakTxMbps: 0,
+    samplesCount: 0,
+    hourlyBytes: {},
+    lastSampleMs: Date.now(),
+  };
+}
+
+function loadDailyTraffic(tenantUuid: string, routerId: string): DailyTrafficSample {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const raw = localStorage.getItem(`mikrocore_daily_traffic_${tenantUuid}_${routerId}`);
+    if (!raw) return createEmptyDailyTraffic(today);
+    const parsed = JSON.parse(raw) as DailyTrafficSample;
+    if (!parsed || parsed.dateYmd !== today) return createEmptyDailyTraffic(today);
+    return parsed;
+  } catch {
+    return createEmptyDailyTraffic(today);
+  }
+}
 
 export default function App() {
   const [lang, setLang] = useState<Language>('ar');
@@ -96,6 +129,10 @@ export default function App() {
   const [promoteNotice, setPromoteNotice] = useState('');
   const [liveTelemetry, setLiveTelemetry] = useState<RouterCloudTelemetry | null>(null);
   const [liveInventory, setLiveInventory] = useState<RouterCloudInventory | null>(null);
+  const [publicInfo, setPublicInfo] = useState<RouterPublicInfo | null>(null);
+  const [dailyTraffic, setDailyTraffic] = useState<DailyTrafficSample>(() =>
+    createEmptyDailyTraffic()
+  );
   const [nocAlerts, setNocAlerts] = useState<NocAlertItem[]>([]);
   const [systemBroadcast, setSystemBroadcast] = useState<SystemBroadcast | null>(null);
   const [dismissedBroadcastId, setDismissedBroadcastId] = useState<string>(() => {
@@ -263,6 +300,40 @@ export default function App() {
         const tel = res.telemetry;
         setLiveTelemetry(tel);
 
+        // Accumulate daily GB totals from live RX/TX telemetry pulses
+        setDailyTraffic((prev) => {
+          const now = Date.now();
+          const today = new Date().toISOString().slice(0, 10);
+          const base = prev.dateYmd === today ? prev : createEmptyDailyTraffic(today);
+          const elapsedSec = Math.max(1, Math.min(20, (now - (base.lastSampleMs || now)) / 1000));
+          const downDelta = ((tel.rxBps || 0) / 8) * elapsedSec;
+          const upDelta = ((tel.txBps || 0) / 8) * elapsedSec;
+          const hourKey = String(new Date().getHours()).padStart(2, '0');
+          const prevHour = base.hourlyBytes[hourKey] || { down: 0, up: 0 };
+          const nextSample: DailyTrafficSample = {
+            dateYmd: today,
+            downloadBytes: base.downloadBytes + downDelta,
+            uploadBytes: base.uploadBytes + upDelta,
+            peakRxMbps: Math.max(base.peakRxMbps, (tel.rxBps || 0) / 1_000_000),
+            peakTxMbps: Math.max(base.peakTxMbps, (tel.txBps || 0) / 1_000_000),
+            samplesCount: base.samplesCount + 1,
+            hourlyBytes: {
+              ...base.hourlyBytes,
+              [hourKey]: { down: prevHour.down + downDelta, up: prevHour.up + upDelta },
+            },
+            lastSampleMs: now,
+          };
+          try {
+            localStorage.setItem(
+              `mikrocore_daily_traffic_${user.tenantUuid}_${activeRouter.id}`,
+              JSON.stringify(nextSample)
+            );
+          } catch {
+            // ignore storage errors
+          }
+          return nextSample;
+        });
+
         const nextAlerts = evaluateRouterAlerts({
           telemetry: tel,
           routerName: activeRouter.name,
@@ -374,6 +445,39 @@ export default function App() {
       cancelled = true;
     };
   }, [user, activeRouter?.id, activeModule, mode]);
+
+  // Sync per-router daily traffic counter & cached public IP/DDNS info
+  useEffect(() => {
+    if (!user || !activeRouter) return;
+    setDailyTraffic(loadDailyTraffic(user.tenantUuid, activeRouter.id));
+    try {
+      const cachedPub = localStorage.getItem(
+        `mikrocore_public_info_${user.tenantUuid}_${activeRouter.id}`
+      );
+      setPublicInfo(cachedPub ? (JSON.parse(cachedPub) as RouterPublicInfo) : null);
+    } catch {
+      setPublicInfo(null);
+    }
+    if (mode !== 'live') return;
+    let cancelled = false;
+    (async () => {
+      const infoRes = await cloudFetchRouterPublicInfo(user.tenantUuid, activeRouter.id);
+      if (!cancelled && infoRes.ok && infoRes.info) {
+        setPublicInfo(infoRes.info);
+        try {
+          localStorage.setItem(
+            `mikrocore_public_info_${user.tenantUuid}_${activeRouter.id}`,
+            JSON.stringify(infoRes.info)
+          );
+        } catch {
+          // ignore
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, activeRouter?.id, mode]);
 
   // Poll Global Owner Update Broadcast for all authenticated devices
   useEffect(() => {
@@ -660,12 +764,73 @@ export default function App() {
               />
             )}
 
-            {activeModule === 'cisco' && (
+            {(activeModule === 'public_ip' ||
+              activeModule === 'vpn_l2tp' ||
+              activeModule === 'starlink_quota' ||
+              activeModule === 'quota_guard' ||
+              activeModule === 'loop_protect' ||
+              activeModule === 'maintenance_mode' ||
+              activeModule === 'daily_report') && (
+              <MikroTikEnterpriseModules
+                activeModule={activeModule as EnterpriseMikroTikModuleId}
+                lang={lang}
+                mode={mode}
+                activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
+                publicInfo={publicInfo}
+                onPublicInfoUpdated={(info) => {
+                  setPublicInfo(info);
+                  try {
+                    if (info) {
+                      localStorage.setItem(
+                        `mikrocore_public_info_${user.tenantUuid}_${activeRouter.id}`,
+                        JSON.stringify(info)
+                      );
+                    }
+                  } catch {
+                    // ignore
+                  }
+                }}
+                liveTelemetry={liveTelemetry}
+                dailyTraffic={dailyTraffic}
+                onResetDailyTraffic={() => {
+                  const empty = createEmptyDailyTraffic();
+                  setDailyTraffic(empty);
+                  try {
+                    localStorage.setItem(
+                      `mikrocore_daily_traffic_${user.tenantUuid}_${activeRouter.id}`,
+                      JSON.stringify(empty)
+                    );
+                  } catch {
+                    // ignore
+                  }
+                }}
+                onSaveToVault={handleSaveToVault}
+              />
+            )}
+
+            {(activeModule === 'cisco' ||
+              activeModule === 'cisco_vlans' ||
+              activeModule === 'cisco_l2' ||
+              activeModule === 'cisco_lacp' ||
+              activeModule === 'cisco_routing' ||
+              activeModule === 'cisco_qos') && (
               <CiscoProModule
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
                 tenantUuid={user.tenantUuid}
+                focusedTab={
+                  activeModule === 'cisco_l2'
+                    ? 'l2'
+                    : activeModule === 'cisco_lacp'
+                    ? 'lacp'
+                    : activeModule === 'cisco_routing'
+                    ? 'routing'
+                    : activeModule === 'cisco_qos'
+                    ? 'qos'
+                    : 'vlans'
+                }
                 onSaveToVault={handleSaveToVault}
               />
             )}

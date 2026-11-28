@@ -52,6 +52,10 @@ import {
   buildSpeedLimitCommand,
   buildToggleAccountCommand,
 } from '../../engine/networkEngine';
+import {
+  buildMigrateInjectedAccountsCommand,
+  buildRebootDishCommand,
+} from '../../engine/enterpriseToolsEngine';
 import { loadSession } from '../../utils/storage';
 
 type NocTab = 'sessions' | 'accounts' | 'dishes' | 'ips' | 'logs';
@@ -341,6 +345,7 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
     `Shaban MikroCore NOC Ready · ${activeRouter.name} (${activeRouter.host})`,
   ]);
   const [rebootConfirm, setRebootConfirm] = useState(false);
+  const [dishRebootConfirmKey, setDishRebootConfirmKey] = useState<string | null>(null);
 
   // Sync directly from Firebase Cloud Agent telemetry when available in Live mode
   useEffect(() => {
@@ -1159,6 +1164,32 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>{lang === 'ar' ? 'تنظيف المنتهية 🧹' : 'Clean Expired 🧹'}</span>
                 </button>
+                <button
+                  type="button"
+                  disabled={
+                    busyActionKey === 'migrate_all_accounts' ||
+                    currentInventory.injected_accounts.length === 0
+                  }
+                  onClick={() =>
+                    sendCloudAction(
+                      'migrate_all_accounts',
+                      buildMigrateInjectedAccountsCommand(
+                        currentInventory.injected_accounts,
+                        activeRouter.osVersion
+                      ),
+                      `تم ترحيل ${currentInventory.injected_accounts.length} حساب إلى السيرفر النشط (${activeRouter.name})`,
+                      `Migrated ${currentInventory.injected_accounts.length} accounts to active router (${activeRouter.name})`
+                    )
+                  }
+                  className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-cyan-400 px-3.5 py-2 text-xs font-extrabold text-slate-950 hover:brightness-110 disabled:opacity-50 cursor-pointer whitespace-nowrap"
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'ترحيل كل الحسابات للسيرفر النشط 🚀'
+                      : 'Migrate All Accounts to Active Router 🚀'}
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -1317,42 +1348,85 @@ export const LiveNocDashboard: React.FC<LiveNocDashboardProps> = ({
                       <th className="px-3 py-2.5 text-start">MAC</th>
                       <th className="px-3 py-2.5 text-start">{lang === 'ar' ? 'المنفذ' : 'Interface'}</th>
                       <th className="px-3 py-2.5 text-start">{lang === 'ar' ? 'النظام' : 'Platform'}</th>
-                      <th className="px-3 py-2.5 text-end">{lang === 'ar' ? 'فحص' : 'Ping'}</th>
+                      <th className="px-3 py-2.5 text-end">{lang === 'ar' ? 'تحكم بالصحن' : 'Dish Control'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/70">
-                    {currentInventory.dishes.map((d: RouterDishNeighbor, idx) => (
-                      <tr key={`${d.mac}-${idx}`} className="hover:bg-cyan-500/5">
-                        <td className="px-3 py-2.5 font-semibold text-white">{d.identity || '—'}</td>
-                        <td className="px-3 py-2.5 font-mono text-cyan-300 tabular-nums" dir="ltr">
-                          {d.address || '—'}
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-slate-300 tabular-nums" dir="ltr">
-                          {d.mac || '—'}
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-emerald-300" dir="ltr">
-                          {d.interface || '—'}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-300">{d.platform || '—'}</td>
-                        <td className="px-3 py-2.5 text-end">
-                          <button
-                            type="button"
-                            disabled={!d.address}
-                            onClick={() =>
-                              sendCloudAction(
-                                `ping_dish_${d.address}`,
-                                buildPingDishCommand(d.address),
-                                `تم إرسال Ping إلى الصحن ${d.identity} (${d.address})`,
-                                `Ping issued to ${d.identity} (${d.address})`
-                              )
-                            }
-                            className="rounded-lg border border-cyan-500/35 bg-cyan-500/12 px-3 py-1 text-[11px] font-bold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-40 cursor-pointer whitespace-nowrap"
-                          >
-                            Ping
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {currentInventory.dishes.map((d: RouterDishNeighbor, idx) => {
+                      const dishKey = `${d.mac || d.address}-${idx}`;
+                      const confirmingReboot = dishRebootConfirmKey === dishKey;
+                      return (
+                        <tr key={dishKey} className="hover:bg-cyan-500/5">
+                          <td className="px-3 py-2.5 font-semibold text-white">{d.identity || '—'}</td>
+                          <td className="px-3 py-2.5 font-mono text-cyan-300 tabular-nums" dir="ltr">
+                            {d.address || '—'}
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-slate-300 tabular-nums" dir="ltr">
+                            {d.mac || '—'}
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-emerald-300" dir="ltr">
+                            {d.interface || '—'}
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-300">{d.platform || '—'}</td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                disabled={!d.address}
+                                onClick={() =>
+                                  sendCloudAction(
+                                    `ping_dish_${d.address}`,
+                                    buildPingDishCommand(d.address),
+                                    `تم إرسال Ping إلى الصحن ${d.identity} (${d.address})`,
+                                    `Ping issued to ${d.identity} (${d.address})`
+                                  )
+                                }
+                                className="rounded-lg border border-cyan-500/35 bg-cyan-500/12 px-2.5 py-1 text-[11px] font-bold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                              >
+                                Ping 📡
+                              </button>
+
+                              {confirmingReboot ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={busyActionKey === `reboot_dish_${dishKey}`}
+                                    onClick={() => {
+                                      setDishRebootConfirmKey(null);
+                                      sendCloudAction(
+                                        `reboot_dish_${dishKey}`,
+                                        buildRebootDishCommand(d.interface || 'ether1', d.identity || d.address),
+                                        `تم إرسال أمر إعادة تشغيل الصحن/المنفذ ${d.identity} (${d.interface})`,
+                                        `Sent PoE/interface reboot for ${d.identity} (${d.interface})`
+                                      );
+                                    }}
+                                    className="rounded-lg bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-rose-400 cursor-pointer whitespace-nowrap"
+                                  >
+                                    {lang === 'ar' ? 'تأكيد 🔄' : 'Confirm 🔄'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDishRebootConfirmKey(null)}
+                                    className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-300 cursor-pointer whitespace-nowrap"
+                                  >
+                                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={!d.interface && !d.address}
+                                  onClick={() => setDishRebootConfirmKey(dishKey)}
+                                  className="rounded-lg border border-amber-500/35 bg-amber-500/12 px-2.5 py-1 text-[11px] font-bold text-amber-200 hover:bg-amber-500/25 disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                                >
+                                  Reboot 🔄
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

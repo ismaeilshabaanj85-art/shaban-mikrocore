@@ -776,3 +776,46 @@ export async function cloudPublishSystemBroadcast(
   }
 }
 
+export async function cloudFetchRouterPublicInfo(
+  tenantUuid: string,
+  routerId: string
+): Promise<{
+  ok: boolean;
+  info: import('../types/mikrocore').RouterPublicInfo | null;
+  error?: string;
+}> {
+  try {
+    const res = await fetchWithTimeout(
+      `${getRouterCloudBase(tenantUuid, routerId)}/public_info.json`,
+      { method: 'GET', cache: 'no-store' }
+    );
+    if (!res.ok) {
+      return { ok: false, info: null, error: `HTTP ${res.status}` };
+    }
+    const raw = (await res.json()) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== 'object') {
+      return { ok: true, info: null };
+    }
+    const publicIp = String(raw.publicIp || '').trim();
+    const cloudDns = String(raw.cloudDns || '').trim();
+    if (!publicIp && !cloudDns) {
+      return { ok: true, info: null };
+    }
+    return {
+      ok: true,
+      info: {
+        publicIp,
+        cloudDns,
+        updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      info: null,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+

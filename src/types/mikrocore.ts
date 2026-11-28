@@ -8,7 +8,19 @@ export type ModuleId =
   | 'wizard'
   | 'radius'
   | 'pcc_security'
+  | 'public_ip'
+  | 'vpn_l2tp'
+  | 'starlink_quota'
+  | 'quota_guard'
+  | 'loop_protect'
+  | 'maintenance_mode'
+  | 'daily_report'
   | 'cisco'
+  | 'cisco_vlans'
+  | 'cisco_l2'
+  | 'cisco_lacp'
+  | 'cisco_routing'
+  | 'cisco_qos'
   | 'troubleshooter'
   | 'portal'
   | 'finance'
@@ -375,3 +387,21 @@ export interface SandboxState {
   ciscoVlans: Array<{ id: number; name: string; ports: string }>;
   ciscoInterfaces: SandboxInterface[];
 }
+
+export interface RouterPublicInfo {
+  publicIp: string;
+  cloudDns: string;
+  updatedAt?: number;
+}
+
+export interface DailyTrafficSample {
+  dateYmd: string; // YYYY-MM-DD
+  downloadBytes: number;
+  uploadBytes: number;
+  peakRxMbps: number;
+  peakTxMbps: number;
+  samplesCount: number;
+  hourlyBytes: Record<string, { down: number; up: number }>;
+  lastSampleMs: number;
+}
+

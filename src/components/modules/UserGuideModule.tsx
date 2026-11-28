@@ -160,6 +160,125 @@ const GUIDE_CARDS: GuideCard[] = [
       'Click "Execute on Router 🚀" inside the AI chat bubble to apply generated fixes immediately.',
     ],
   },
+  {
+    moduleId: 'public_ip',
+    titleAr: '9. جلب الآيبي العالمي واكتشاف CGNAT / ستارلينك 🌐',
+    titleEn: '9. Public IP Discovery & CGNAT / Starlink Detector 🌐',
+    summaryAr: 'تفعيل MikroTik Cloud DDNS وفحص هل الخط يمتلك Public IP حقيقي أم يقع خلف CGNAT (ستارلينك).',
+    summaryEn: 'Updates MikroTik Cloud DDNS and automatically classifies Direct Public IP vs CGNAT/Starlink.',
+    stepsAr: [
+      'افتح قسم "جلب الآيبي العالمي" واضغط "جلب الآيبي الخارجي للسيرفر الآن 🌐".',
+      'يقرأ النظام الآيبي الخارجي واسم النطاق Cloud DDNS ويحدد تلقائياً حالة CGNAT أو Public IP مباشر.',
+      'انسخ النطاق السحابي لاستخدامه في ربط الـ VPN أو الإدارة عن بُعد.',
+    ],
+    stepsEn: [
+      'Open "Public IP & DDNS" and click "Fetch Server Public IP Now 🌐".',
+      'Review the retrieved Public IP, Cloud DDNS hostname, and Direct vs CGNAT classification badge.',
+      'Use the 1-click copy buttons to fill remote management or L2TP VPN endpoints.',
+    ],
+  },
+  {
+    moduleId: 'vpn_l2tp',
+    titleAr: '10. ربط VPN لميكروتك (L2TP / IPSec PSK) 🔐',
+    titleEn: '10. MikroTik L2TP/IPSec PSK VPN Server 🔐',
+    summaryAr: 'فتح قناة آمنة من هاتفك للوصول إلى صحون 192.168.x.x و 10.x.x.x بدون إبطاء المشتركين، مع التراجع الكامل.',
+    summaryEn: 'Native v6/v7 L2TP/IPSec PSK server to manage internal dish subnets from mobile with one-click undo.',
+    stepsAr: [
+      'أدخل اسم المستخدم وكلمة المرور ومفتاح IPSec Secret وشبكة الصحون ثم اضغط "تفعيل سيرفر الـ VPN 🚀".',
+      'تُعبّأ بطاقة إعداد الهاتف الجاهزة تلقائياً بعنوان Cloud DDNS وبيانات الدخول مع دليل من 3 خطوات.',
+      'لإلغاء الميزة بأمان دون المساس ببقية قواعد الفايروول اضغط "إيقاف الـ VPN 🛑".',
+    ],
+    stepsEn: [
+      'Configure username, password, IPSec secret, and dish subnet, then click "Enable VPN Server 🚀".',
+      'Use the auto-filled Mobile Connection Card and 3-step guide to connect Android/iOS/Windows.',
+      'Click "Disable VPN 🛑" anytime to remove only MikroCore_VPN rules safely.',
+    ],
+  },
+  {
+    moduleId: 'starlink_quota',
+    titleAr: '11. حماية حصة الستارلينك وقت الذروة 🛰️',
+    titleEn: '11. Starlink Peak Quota Saver (19:00–00:00) 🛰️',
+    summaryAr: 'تقييد التحميلات الثقيلة ساعات الذروة (7م–12م) لتوفير حتى 40% من الحصة مع بقاء الألعاب والواتساب بسرعة كاملة.',
+    summaryEn: 'Schedules heavy download capping during peak hours to save up to 40% quota while keeping PUBG/WhatsApp fast.',
+    stepsAr: [
+      'اضبط أوقات الذروة وسقف التحميل الثقيل (مثل 2M/2M) ثم اضغط "تفعيل توفير ذروة الستارلينك 🚀".',
+      'يتم تمييز حزم الألعاب والواتساب بأولوية 1 وتحديد التحميلات الضخمة تلقائياً.',
+      'يمكنك إزالة القواعد والمجدول بالكامل بضغطة على "إيقاف توفير الذروة 🛑".',
+    ],
+    stepsEn: [
+      'Adjust peak window and bulk download cap, then click "Activate Starlink Peak Saver 🚀".',
+      'Gaming/WhatsApp traffic stays fast while large downloads are capped automatically during peak hours.',
+      'Click "Disable Peak Saver 🛑" to remove only MikroCore_StarlinkSaver rules.',
+    ],
+  },
+  {
+    moduleId: 'quota_guard',
+    titleAr: '12. حارس الحصص والتصفير التلقائي (512kbps) 📊',
+    titleEn: '12. Smart Quota Guard & Auto Reset (Daily/Monthly) 📊',
+    summaryAr: 'خفض سرعة المتجاوزين للحصة إلى 512kbps لتشغيل الواتساب والتصفح بدلاً من الفصل المفاجئ، مع تصفير تلقائي.',
+    summaryEn: 'Soft-throttles users exceeding GB quota to 512kbps for messaging with automated midnight/monthly reset.',
+    stepsAr: [
+      'اختر الخدمة (Hotspot أو PPPoE) والباقة وسقف الجيجابايت وجدول التصفير (يومي 00:00 أو شهري).',
+      'اضغط "تفعيل حارس الحصص والتصفير 🚀" لإنشاء البروفايل البديل والمراقبة التلقائية.',
+      'أوقف المراقبة والتصفير متى شئت عبر "إيقاف الحارس 🛑".',
+    ],
+    stepsEn: [
+      'Select Hotspot/PPPoE profile, GB quota limit, fallback speed, and daily/monthly reset schedule.',
+      'Click "Enable Quota Guard & Reset 🚀" to deploy automated monitoring & reset schedulers.',
+      'Click "Disable Guard 🛑" to cleanly remove only MikroCore_QuotaGuard items.',
+    ],
+  },
+  {
+    moduleId: 'loop_protect',
+    titleAr: '13. الحماية من الحلقات وعواصف البث (Loop & Storm) 🛡️',
+    titleEn: '13. Loop Protect & Broadcast Storm Guard 🛡️',
+    summaryAr: 'حماية منافذ الإيثرنت والجسر من الحلقات السلكية وعواصف Broadcast/ARP التي تسبب تجمد الراوتر.',
+    summaryEn: 'Enables loop-protect on Ethernet ports plus Bridge ARP/Broadcast storm filters on v6 & v7.',
+    stepsAr: [
+      'أدخل اسم الـ Bridge الرئيسي واضغط "تفعيل الحماية من الحلقات 🚀".',
+      'يفعّل loop-protect على جميع المنافذ ويضيف فلاتر منع عواصف البث في الجسر.',
+      'يمكن إلغاء القواعد بالكامل بضغطة واحدة عبر "إيقاف الحماية 🛑".',
+    ],
+    stepsEn: [
+      'Verify your Bridge interface name and click "Enable Loop Protect 🚀".',
+      'Activates hardware port loop protection and bridge broadcast rate limits.',
+      'Use "Disable Protection 🛑" to remove MikroCore_LoopProtect filters cleanly.',
+    ],
+  },
+  {
+    moduleId: 'maintenance_mode',
+    titleAr: '14. وضع الصيانة الطارئة وتقرير الاستهلاك اليومي 🚧📈',
+    titleEn: '14. Emergency Maintenance Mode & Daily Bandwidth Report 🚧📈',
+    summaryAr: 'تحويل حركة التصفح مؤقتاً بضغطة واحدة أثناء الصيانة، بالإضافة لمتابعة استهلاك السيرفر اليومي بالجيجابايت.',
+    summaryEn: 'One-click HTTP maintenance redirect during tower work plus live daily downloaded/uploaded GB reporting.',
+    stepsAr: [
+      'في "وضع الصيانة الطارئة" اضغط "تفعيل وضع الصيانة 🚧" مع استثناء IP الإدارة، وعند الانتهاء اضغط "إنهاء الصيانة وإعادة الخدمة ✅".',
+      'في "تقرير استهلاك السيرفر اليومي" راقب الجيجابايت المسحوبة والمرفوعة مقارنة بسقف ستارلينك وصدّر التقرير CSV.',
+      'من لوحة القيادة الحية استخدم Ping 📡 و Reboot 🔄 على الصحون و"ترحيل كل الحسابات للسيرفر النشط 🚀".',
+    ],
+    stepsEn: [
+      'Toggle Emergency Maintenance with admin IP exemption and restore normal service in one click.',
+      'Track accumulated daily Download/Upload GB and peak Mbps against your ISP quota target.',
+      'In Live NOC, use Dish Ping 📡 / Reboot 🔄 and 1-click Bulk Account Migration.',
+    ],
+  },
+  {
+    moduleId: 'cisco_vlans',
+    titleAr: '15. قسم سيسكو المتكامل (VLANs, L2, LACP, OSPF/BGP, Auto-QoS) 🖧',
+    titleEn: '15. Cisco Enterprise Section (VLANs, L2 Shield, LACP, OSPF/BGP, QoS) 🖧',
+    summaryAr: 'خمس أدوات احترافية مخصصة في القائمة الجانبية لقسم سيسكو لتوليد أوامر IOS وتشديد السويتشات وتوجيه OSPF MD5 و Auto-QoS.',
+    summaryEn: 'Five dedicated Cisco sidebar tools covering VLANs/SVI, Layer-2 Shield, MikroTik LACP Sync, OSPF MD5/BGP, and Auto-QoS.',
+    stepsAr: [
+      'تنقل من قسم سيسكو في القائمة الجانبية بين VLANs و SVI، درع L2 (DHCP Snooping & DAI)، ومزامنة LACP مع تنفيذ مايكروتك.',
+      'استخدم "التوجيه الديناميكي" لإعداد OSPF متعدد المناطق بمصادقة MD5 أو BGP مع Prefix-Lists.',
+      'استخدم "Auto-QoS" لتوليد سياسات mls qos و class-map/policy-map لإعطاء الأولوية للألعاب و VoIP.',
+    ],
+    stepsEn: [
+      'Switch directly between Cisco VLANs/SVI, L2 Shield, LACP Sync (with direct MikroTik push), OSPF/BGP, and Auto-QoS.',
+      'Configure OSPF multi-area MD5 authentication and BGP prefix-list route filtering.',
+      'Generate mls qos class-map/policy-map templates prioritizing Gaming UDP & VoIP flows.',
+    ],
+  },
 ];
 
 const FAQS = [
