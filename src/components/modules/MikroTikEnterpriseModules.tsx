@@ -35,6 +35,7 @@ import {
   cloudSendAndAwaitRouterCommand,
 } from '../../utils/firebaseCloud';
 import {
+  analyzeRouterPublicInfo,
   buildFetchPublicIpCommand,
   buildL2tpVpnDisableCommand,
   buildL2tpVpnEnableCommand,
@@ -46,7 +47,7 @@ import {
   buildQuotaGuardEnableCommand,
   buildStarlinkPeakSaverDisableCommand,
   buildStarlinkPeakSaverEnableCommand,
-  classifyPublicIpStatus,
+  resolvePrimaryWinboxVpnHost,
 } from '../../engine/enterpriseToolsEngine';
 import { CodeTerminalBox } from '../CodeTerminalBox';
 
@@ -217,11 +218,12 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
 
     const cmd = buildFetchPublicIpCommand(tenantUuid, activeRouter.id);
     if (mode === 'sandbox') {
+      const isDirectSingle = activeRouter.connectionMethod === 'static_ip';
       const simInfo: RouterPublicInfo = {
-        publicIp:
-          activeRouter.connectionMethod === 'static_ip'
-            ? '185.44.120.77'
-            : '100.84.192.45',
+        publicIp: '185.44.120.77',
+        directIp: '185.44.120.77',
+        directInterface: 'ether2-PublicWAN',
+        cloudExitIp: isDirectSingle ? '185.44.120.77' : '100.84.192.45',
         cloudDns: `${activeRouter.id.replace(/[^a-z0-9]/gi, '').slice(0, 10) || 'a1b2c3d4'}.sn.mynetname.net`,
         updatedAt: Date.now(),
       };
@@ -231,8 +233,8 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
         ok: true,
         text:
           lang === 'ar'
-            ? 'تم جلب الآيبي العالمي و Cloud DDNS في وضع المحاكاة ✅'
-            : 'Fetched simulated Public IP & Cloud DDNS ✅',
+            ? 'تم جلب الآيبي المباشر على المنفذ (185.44.120.77) و Cloud Exit/DDNS في وضع المحاكاة ✅'
+            : 'Fetched Direct Interface Public IP & Cloud Exit/DDNS (Sandbox) ✅',
       });
       return;
     }
@@ -291,7 +293,7 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
   // 1. PUBLIC IP & CLOUD DDNS
   // =========================================================
   if (activeModule === 'public_ip') {
-    const analysis = classifyPublicIpStatus(publicInfo?.publicIp || '');
+    const analysis = analyzeRouterPublicInfo(publicInfo);
     const cmd = buildFetchPublicIpCommand(tenantUuid, activeRouter.id);
 
     return (
@@ -308,8 +310,8 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
             </h2>
             <p className="mt-1 text-xs text-slate-400">
               {lang === 'ar'
-                ? 'يفعّل MikroTik Cloud DDNS ويفحص ما إذا كان خط الإنترنت يمتلك Public IP مباشر أو يقع خلف CGNAT / ستارلينك.'
-                : 'Forces MikroTik Cloud DDNS update and classifies Direct Public IP vs ISP CGNAT / Starlink.'}
+                ? 'يفحص منافذ الراوتر (/ip address) لاستخراج الآيبي العالمي المباشر لـ WinBox و VPN، مع جلب Cloud Exit IP و DDNS.'
+                : 'Scans active /ip address interfaces for Direct Public IP (for WinBox/VPN) alongside MikroTik Cloud Exit IP & DDNS.'}
             </p>
           </div>
 
@@ -330,51 +332,105 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
 
         <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-xs text-cyan-100 leading-relaxed space-y-1.5">
           <p className="font-extrabold text-cyan-300">
-            {lang === 'ar' ? 'كيف تعمل ميزة الآيبي العالمي؟' : 'How Public IP Detection Works'}
+            {lang === 'ar' ? 'كيف تعمل ميزة الآيبي العالمي المزدوجة؟' : 'How Dual Public IP Detection Works'}
           </p>
           <p>
             {lang === 'ar'
-              ? 'يقوم النظام بتفعيل خدمة IP Cloud داخل راوتر مايكروتك (v6 و v7) وسحب العنوان الخارجي واسم النطاق السحابي Cloud DDNS تلقائياً عبر Firebase، كما يميّز فوراً بين الآيبي العام المباشر (Real Public IP) ونطاقات CGNAT / ستارلينك (100.64.0.0/10).'
-              : 'Enables MikroTik IP Cloud on v6/v7, retrieves your WAN public IP and *.sn.mynetname.net DDNS hostname, and automatically tells you whether L2TP/direct inbound ports are reachable or behind Starlink/CGNAT.'}
+              ? 'يفحص الأمر كلا المصدرين معاً على v6 و v7: (1) الآيبي العالمي المباشر على منافذ /ip address (مع استبعاد 10.x و 192.168.x و 172.16-31.x و 100.64-127.x ستارلينك) لاعتماده كعنوان رئيسي لـ WinBox و L2TP VPN حتى عند تفعيل دمج الخطوط أو ستارلينك، و(2) عنوان خروج السحابة Cloud Exit IP واسم النطاق Cloud DDNS.'
+              : 'Checks both sources on v6 & v7: (1) Direct Interface Public IP from /ip address (filtering out private & CGNAT ranges) as primary endpoint for inbound WinBox/VPN even during Multi-WAN Starlink routing, and (2) Cloud Exit IP & *.sn.mynetname.net DDNS.'}
           </p>
         </div>
 
         {feedbackBanner}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="noc-glass rounded-2xl p-4 space-y-2">
-            <p className="text-[11px] text-slate-400">
-              {lang === 'ar' ? 'الآيبي العالمي (Public IP)' : 'Public IP Address'}
-            </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="noc-glass rounded-2xl p-4 space-y-2 border border-cyan-500/30">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-lg font-extrabold text-cyan-300 tabular-nums" dir="ltr">
-                {publicInfo?.publicIp || '—'}
+              <p className="text-xs font-semibold text-cyan-300">
+                {lang === 'ar'
+                  ? 'الآيبي الأساسي للوصول (WinBox & VPN)'
+                  : 'Primary IP (WinBox & VPN)'}
+              </p>
+              {analysis.hasDirectInterfaceIp && (
+                <span
+                  dir="ltr"
+                  className="rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 font-mono text-[10px] font-bold text-emerald-300 whitespace-nowrap shrink-0"
+                >
+                  {analysis.directInterface || 'Direct WAN'}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xl font-extrabold text-cyan-300 tabular-nums" dir="ltr">
+                {analysis.primaryIp || '—'}
               </span>
-              {publicInfo?.publicIp && (
+              {analysis.primaryIp && (
                 <button
                   type="button"
-                  onClick={() => copyText('pub_ip', publicInfo.publicIp)}
-                  className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-bold text-cyan-200 hover:bg-cyan-500/20 cursor-pointer flex items-center gap-1"
+                  onClick={() => copyText('pub_ip', analysis.primaryIp)}
+                  className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-bold text-cyan-200 hover:bg-cyan-500/20 cursor-pointer flex items-center gap-1 shrink-0"
                 >
                   {copiedKey === 'pub_ip' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
                   <span>{copiedKey === 'pub_ip' ? (lang === 'ar' ? 'نُسخ' : 'Copied') : lang === 'ar' ? 'نسخ' : 'Copy'}</span>
                 </button>
               )}
             </div>
+            <p className="text-[11px] text-slate-400">
+              {analysis.hasDirectInterfaceIp
+                ? lang === 'ar'
+                  ? 'مأخوذ مباشرة من /ip address للاتصال المباشر الثابت'
+                  : 'Sourced directly from /ip address for reliable inbound access'
+                : lang === 'ar'
+                ? 'لا يوجد IP عام مباشر على المنافذ — يعرض Cloud Exit'
+                : 'No direct interface public IP — showing Cloud Exit fallback'}
+            </p>
           </div>
 
           <div className="noc-glass rounded-2xl p-4 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-slate-300">
+                {lang === 'ar' ? 'خروج السحابة (Cloud Exit IP)' : 'Cloud Exit IP (/ip cloud)'}
+              </p>
+              {analysis.hasMultiWanHybrid && (
+                <span className="rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-300 whitespace-nowrap shrink-0">
+                  {lang === 'ar' ? 'مسار الخروج' : 'Exit Route'}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xl font-extrabold text-amber-300 tabular-nums" dir="ltr">
+                {analysis.cloudExitIp || '—'}
+              </span>
+              {analysis.cloudExitIp && (
+                <button
+                  type="button"
+                  onClick={() => copyText('cloud_exit_ip', analysis.cloudExitIp)}
+                  className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold text-amber-200 hover:bg-amber-500/20 cursor-pointer flex items-center gap-1 shrink-0"
+                >
+                  {copiedKey === 'cloud_exit_ip' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  <span>{copiedKey === 'cloud_exit_ip' ? (lang === 'ar' ? 'نُسخ' : 'Copied') : lang === 'ar' ? 'نسخ' : 'Copy'}</span>
+                </button>
+              )}
+            </div>
             <p className="text-[11px] text-slate-400">
+              {lang === 'ar'
+                ? 'الآيبي الذي يخرج منه الراوتر للإنترنت (مثل ستارلينك أو الخط الافتراضي)'
+                : 'Default WAN gateway IP seen by MikroTik Cloud'}
+            </p>
+          </div>
+
+          <div className="noc-glass rounded-2xl p-4 space-y-2">
+            <p className="text-xs font-semibold text-slate-300">
               {lang === 'ar' ? 'نطاق السحابة (Cloud DDNS)' : 'MikroTik Cloud DDNS'}
             </p>
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-mono text-sm font-bold text-emerald-300" dir="ltr">
-                {publicInfo?.cloudDns || '—'}
+                {analysis.cloudDns || '—'}
               </span>
-              {publicInfo?.cloudDns && (
+              {analysis.cloudDns && (
                 <button
                   type="button"
-                  onClick={() => copyText('cloud_dns', publicInfo.cloudDns)}
+                  onClick={() => copyText('cloud_dns', analysis.cloudDns)}
                   className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/20 cursor-pointer flex items-center gap-1 shrink-0"
                 >
                   {copiedKey === 'cloud_dns' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -382,10 +438,15 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
                 </button>
               )}
             </div>
+            <p className="text-[11px] text-slate-400">
+              {lang === 'ar'
+                ? 'النطاق التلقائي المربوط بخدمة MikroTik Cloud DDNS'
+                : 'Auto-updated MikroTik Cloud DDNS hostname'}
+            </p>
           </div>
 
           <div className="noc-glass rounded-2xl p-4 space-y-2">
-            <p className="text-[11px] text-slate-400">
+            <p className="text-xs font-semibold text-slate-300">
               {lang === 'ar' ? 'تشخيص الاتصال التلقائي' : 'Auto Network Classification'}
             </p>
             <p
@@ -406,7 +467,7 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
         </div>
 
         <CodeTerminalBox
-          title={lang === 'ar' ? 'أمر الفحص السحابي (v6 & v7)' : 'Cloud Discovery Command (v6 & v7)'}
+          title={lang === 'ar' ? 'أمر الفحص السحابي المزدوج (v6 & v7)' : 'Dual Public IP Discovery Command (v6 & v7)'}
           code={cmd}
           filename="mikrocore_public_ip.rsc"
           lang={lang}
@@ -431,8 +492,7 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
       dishesSubnet: vpnSubnet,
     });
     const disableCmd = buildL2tpVpnDisableCommand();
-    const vpnHost =
-      publicInfo?.cloudDns || publicInfo?.publicIp || activeRouter.host || 'your-router.sn.mynetname.net';
+    const vpnHost = resolvePrimaryWinboxVpnHost(publicInfo, activeRouter.host);
 
     return (
       <div className="space-y-5">
@@ -568,7 +628,11 @@ export const MikroTikEnterpriseModules: React.FC<MikroTikEnterpriseModulesProps>
               </span>
             </h3>
             <span className="text-[11px] font-mono text-slate-400">
-              {publicInfo?.cloudDns || publicInfo?.publicIp
+              {publicInfo?.directIp
+                ? lang === 'ar'
+                  ? 'معبأة تلقائياً بالآيبي المباشر على المنفذ ✅'
+                  : 'Auto-filled from Direct Interface Public IP ✅'
+                : publicInfo?.cloudDns || publicInfo?.publicIp
                 ? lang === 'ar'
                   ? 'معبأة تلقائياً من الآيبي العالمي ✅'
                   : 'Auto-filled from Public IP ✅'

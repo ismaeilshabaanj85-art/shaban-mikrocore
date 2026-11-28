@@ -164,17 +164,17 @@ const GUIDE_CARDS: GuideCard[] = [
     moduleId: 'public_ip',
     titleAr: '9. جلب الآيبي العالمي واكتشاف CGNAT / ستارلينك 🌐',
     titleEn: '9. Public IP Discovery & CGNAT / Starlink Detector 🌐',
-    summaryAr: 'تفعيل MikroTik Cloud DDNS وفحص هل الخط يمتلك Public IP حقيقي أم يقع خلف CGNAT (ستارلينك).',
-    summaryEn: 'Updates MikroTik Cloud DDNS and automatically classifies Direct Public IP vs CGNAT/Starlink.',
+    summaryAr: 'فحص منافذ الراوتر (/ip address) لاستخراج الآيبي العالمي المباشر لـ WinBox و VPN، بجانب Cloud Exit IP و DDNS.',
+    summaryEn: 'Extracts Direct Interface Public IP from /ip address (for WinBox/VPN) alongside Cloud Exit IP & DDNS.',
     stepsAr: [
       'افتح قسم "جلب الآيبي العالمي" واضغط "جلب الآيبي الخارجي للسيرفر الآن 🌐".',
-      'يقرأ النظام الآيبي الخارجي واسم النطاق Cloud DDNS ويحدد تلقائياً حالة CGNAT أو Public IP مباشر.',
-      'انسخ النطاق السحابي لاستخدامه في ربط الـ VPN أو الإدارة عن بُعد.',
+      'يستخرج النظام الآيبي المباشر على المنفذ (مع استبعاد 10.x و 192.168.x و 172.16-31.x و 100.64-127.x) ويعرضه كأساسي للوصول عن بُعد.',
+      'تُظهر البطاقات أيضاً عنوان خروج ستارلينك/السحابة Cloud Exit IP واسم النطاق Cloud DDNS مع أزرار نسخ فورية.',
     ],
     stepsEn: [
       'Open "Public IP & DDNS" and click "Fetch Server Public IP Now 🌐".',
-      'Review the retrieved Public IP, Cloud DDNS hostname, and Direct vs CGNAT classification badge.',
-      'Use the 1-click copy buttons to fill remote management or L2TP VPN endpoints.',
+      'Scans /ip address excluding private & CGNAT ranges so your Direct Interface Public IP stays primary even on Multi-WAN Starlink.',
+      'Shows Cloud Exit IP, Cloud DDNS, and 1-click copy buttons for remote WinBox & L2TP VPN.',
     ],
   },
   {

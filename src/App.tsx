@@ -63,6 +63,7 @@ import {
   saveTenantVouchers,
 } from './utils/storage';
 import { createInitialSandboxState } from './engine/sandboxEngine';
+import { normalizeRouterPublicInfo } from './engine/enterpriseToolsEngine';
 import { LoginGate } from './components/LoginGate';
 import { TopBar } from './components/TopBar';
 import { SidebarNav } from './components/SidebarNav';
@@ -454,7 +455,9 @@ export default function App() {
       const cachedPub = localStorage.getItem(
         `mikrocore_public_info_${user.tenantUuid}_${activeRouter.id}`
       );
-      setPublicInfo(cachedPub ? (JSON.parse(cachedPub) as RouterPublicInfo) : null);
+      setPublicInfo(
+        cachedPub ? normalizeRouterPublicInfo(JSON.parse(cachedPub) as RouterPublicInfo) : null
+      );
     } catch {
       setPublicInfo(null);
     }
@@ -463,7 +466,8 @@ export default function App() {
     (async () => {
       const infoRes = await cloudFetchRouterPublicInfo(user.tenantUuid, activeRouter.id);
       if (!cancelled && infoRes.ok && infoRes.info) {
-        setPublicInfo(infoRes.info);
+        const normalized = normalizeRouterPublicInfo(infoRes.info) || infoRes.info;
+        setPublicInfo(normalized);
         try {
           localStorage.setItem(
             `mikrocore_public_info_${user.tenantUuid}_${activeRouter.id}`,

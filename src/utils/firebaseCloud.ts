@@ -796,8 +796,12 @@ export async function cloudFetchRouterPublicInfo(
     if (!raw || typeof raw !== 'object') {
       return { ok: true, info: null };
     }
-    const publicIp = String(raw.publicIp || '').trim();
+    const directIp = String(raw.directIp || '').trim();
+    const directInterface = String(raw.directInterface || '').trim();
+    const cloudExitIp = String(raw.cloudExitIp || '').trim();
+    const rawPublicIp = String(raw.publicIp || '').trim();
     const cloudDns = String(raw.cloudDns || '').trim();
+    const publicIp = directIp || rawPublicIp || cloudExitIp;
     if (!publicIp && !cloudDns) {
       return { ok: true, info: null };
     }
@@ -805,6 +809,9 @@ export async function cloudFetchRouterPublicInfo(
       ok: true,
       info: {
         publicIp,
+        ...(directIp ? { directIp } : {}),
+        ...(directInterface ? { directInterface } : {}),
+        ...(cloudExitIp ? { cloudExitIp } : {}),
         cloudDns,
         updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
       },

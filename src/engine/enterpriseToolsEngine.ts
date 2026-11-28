@@ -1,4 +1,4 @@
-import { CiscoConfig, RouterOSVersion } from '../types/mikrocore';
+import { CiscoConfig, RouterOSVersion, RouterPublicInfo } from '../types/mikrocore';
 import { RouterInjectedAccount } from '../utils/firebaseCloud';
 import { sanitizeCliToken } from '../utils/security';
 import { getRouterCloudBase } from '../utils/firebaseCloud';
@@ -12,6 +12,35 @@ export interface PublicIpAnalysis {
   labelEn: string;
   detailAr: string;
   detailEn: string;
+}
+
+export interface RouterPublicInfoAnalysis extends PublicIpAnalysis {
+  primaryIp: string;
+  directIp: string;
+  directInterface: string;
+  cloudExitIp: string;
+  cloudDns: string;
+  hasDirectInterfaceIp: boolean;
+  hasMultiWanHybrid: boolean;
+}
+
+/**
+ * Returns true strictly for globally routable public IPv4 addresses
+ * (excludes 0.x, 10.x, 100.64–127.x CGNAT, 127.x, 169.254.x, 172.16–31.x, 192.168.x, >=224.x).
+ */
+export function isPublicRoutableIpv4(ip: string): boolean {
+  const clean = (ip || '').trim();
+  const match = clean.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return false;
+  const octets = [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+  if (octets.some((n) => n < 0 || n > 255)) return false;
+  const [o1, o2] = octets;
+  if (o1 === 0 || o1 === 10 || o1 === 127 || o1 >= 224) return false;
+  if (o1 === 100 && o2 >= 64 && o2 <= 127) return false;
+  if (o1 === 169 && o2 === 254) return false;
+  if (o1 === 172 && o2 >= 16 && o2 <= 31) return false;
+  if (o1 === 192 && o2 === 168) return false;
+  return true;
 }
 
 /**
@@ -38,8 +67,19 @@ export function classifyPublicIpStatus(ip: string): PublicIpAnalysis {
       isDirectPublic: false,
       labelAr: 'عنوان IP غير صالح',
       labelEn: 'Invalid IPv4',
-      detailAr: 'تحقق من القيمة المسترجعة من MikroTik Cloud.',
-      detailEn: 'Verify value returned by MikroTik Cloud.',
+      detailAr: 'تحقق من القيمة المسترجعة من الراوتر.',
+      detailEn: 'Verify value returned by router.',
+    };
+  }
+
+  if (o1 === 0) {
+    return {
+      classification: 'unknown',
+      isDirectPublic: false,
+      labelAr: 'بانتظار قراءة IP صالح',
+      labelEn: 'Pending Valid Public IP',
+      detailAr: 'الراوتر أعاد العنوان 0.0.0.0 — تأكد من اتصال الإنترنت وإعادة المحاولة.',
+      detailEn: 'Router reported 0.0.0.0 — verify internet connectivity and retry.',
     };
   }
 
@@ -53,12 +93,19 @@ export function classifyPublicIpStatus(ip: string): PublicIpAnalysis {
       detailAr:
         'الراوتر متصل خلف NAT مزود الخدمة (100.64.0.0/10). يعمل الوكيل السحابي بسلاسة، بينما يتطلب الوصول المباشر IP عام حقيقي أو نفق سحابي.',
       detailEn:
-        'Router sits behind ISP CGNAT (100.64.0.0/10). Cloud Agent works natively; direct inbound L2TP requires a true Public IP.',
+        'Router sits behind ISP CGNAT (100.64.0.0/10). Cloud Agent works natively; direct inbound L2TP/WinBox requires a true Public IP.',
     };
   }
 
-  // RFC 1918 Private Ranges
-  if (o1 === 10 || (o1 === 172 && o2 >= 16 && o2 <= 31) || (o1 === 192 && o2 === 168)) {
+  // RFC 1918 Private / Loopback / Link-Local / Reserved
+  if (
+    o1 === 10 ||
+    o1 === 127 ||
+    (o1 === 169 && o2 === 254) ||
+    (o1 === 172 && o2 >= 16 && o2 <= 31) ||
+    (o1 === 192 && o2 === 168) ||
+    o1 >= 224
+  ) {
     return {
       classification: 'private_lan',
       isDirectPublic: false,
@@ -77,18 +124,164 @@ export function classifyPublicIpStatus(ip: string): PublicIpAnalysis {
     labelAr: 'آيبي عالمي مباشر (Real Public IP ✅)',
     labelEn: 'Direct Public IP ✅',
     detailAr:
-      'الراوتر يمتلك عنوان IP عام مباشر! يمكنك استخدام Cloud DDNS أو الـ Public IP للوصول المباشر وربط L2TP/IPSec VPN فوراً.',
+      'الراوتر يمتلك عنوان IP عام مباشر! يمكنك استخدامه فوراً للوصول إلى WinBox وربط L2TP/IPSec VPN من أي مكان.',
     detailEn:
-      'Router holds a direct routable Public IP! Cloud DDNS and L2TP/IPSec VPN work directly from anywhere.',
+      'Router holds a direct routable Public IP! Use it directly for remote WinBox and L2TP/IPSec VPN from anywhere.',
   };
 }
 
 /**
- * Generates universal RouterOS v6 & v7 command to update MikroTik Cloud DDNS and push public_info.json to Firebase RTDB.
+ * Analyzes RouterPublicInfo preferring Direct Interface Public IP as primary for WinBox/VPN
+ * while preserving Cloud Exit IP / DDNS visibility (ideal for Multi-WAN + Starlink setups).
+ */
+export function analyzeRouterPublicInfo(info: RouterPublicInfo | null): RouterPublicInfoAnalysis {
+  const directIp = (info?.directIp || '').trim();
+  const directInterface = (info?.directInterface || '').trim();
+  const rawCloudExit = (info?.cloudExitIp || '').trim();
+  const rawPublic = (info?.publicIp || '').trim();
+  const cloudDns = (info?.cloudDns || '').trim();
+
+  const hasDirectInterfaceIp = isPublicRoutableIpv4(directIp);
+  const cloudExitIp = rawCloudExit || (!hasDirectInterfaceIp ? rawPublic : '');
+  const primaryIp = hasDirectInterfaceIp ? directIp : rawPublic || cloudExitIp;
+  const base = classifyPublicIpStatus(primaryIp);
+
+  const hasMultiWanHybrid =
+    hasDirectInterfaceIp && Boolean(cloudExitIp) && cloudExitIp !== directIp;
+
+  if (hasDirectInterfaceIp && hasMultiWanHybrid) {
+    const cloudClass = classifyPublicIpStatus(cloudExitIp);
+    const exitHintAr =
+      cloudClass.classification === 'cgnat_starlink'
+        ? `بينما خروج السحابة (Cloud Exit) يمر عبر ستارلينك/CGNAT (${cloudExitIp})`
+        : `بينما خروج السحابة (Cloud Exit) هو (${cloudExitIp})`;
+    const exitHintEn =
+      cloudClass.classification === 'cgnat_starlink'
+        ? `while Cloud Exit routes through Starlink/CGNAT (${cloudExitIp})`
+        : `while Cloud Exit routes through (${cloudExitIp})`;
+
+    return {
+      ...base,
+      primaryIp,
+      directIp,
+      directInterface,
+      cloudExitIp,
+      cloudDns,
+      hasDirectInterfaceIp: true,
+      hasMultiWanHybrid: true,
+      labelAr: 'آيبي عالمي مباشر على المنفذ (Multi-WAN + Starlink) ✅',
+      labelEn: 'Direct Interface Public IP (Multi-WAN Active) ✅',
+      detailAr: `الراوتر يمتلك عنوان IP عالمي مباشر على المنفذ${directInterface ? ` (${directInterface})` : ''} للوصول الفوري عبر WinBox و L2TP VPN، ${exitHintAr}.`,
+      detailEn: `Router holds a direct inbound Public IP on${directInterface ? ` (${directInterface})` : ''} for reliable WinBox & L2TP VPN access, ${exitHintEn}.`,
+    };
+  }
+
+  return {
+    ...base,
+    primaryIp,
+    directIp,
+    directInterface,
+    cloudExitIp,
+    cloudDns,
+    hasDirectInterfaceIp,
+    hasMultiWanHybrid: false,
+  };
+}
+
+/**
+ * Resolves the best endpoint for remote WinBox and L2TP/IPSec VPN access:
+ * always prioritizes Direct Interface Public IP over Cloud DDNS (which may point to Starlink CGNAT in Multi-WAN).
+ */
+export function resolvePrimaryWinboxVpnHost(
+  info: RouterPublicInfo | null,
+  fallbackHost?: string
+): string {
+  if (info?.directIp && isPublicRoutableIpv4(info.directIp)) {
+    return info.directIp.trim();
+  }
+  if (info?.publicIp && isPublicRoutableIpv4(info.publicIp)) {
+    return info.publicIp.trim();
+  }
+  return (
+    (info?.cloudDns || '').trim() ||
+    (info?.publicIp || '').trim() ||
+    (fallbackHost || '').trim() ||
+    'your-router.sn.mynetname.net'
+  );
+}
+
+/**
+ * Normalizes public_info records from RTDB or cache so directIp is always elevated as primary publicIp.
+ */
+export function normalizeRouterPublicInfo(
+  raw: Partial<RouterPublicInfo> | null | undefined
+): RouterPublicInfo | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rawDirect = String(raw.directIp || '').trim();
+  const directIp = isPublicRoutableIpv4(rawDirect) ? rawDirect : '';
+  const directInterface = String(raw.directInterface || '').trim();
+  const cloudExitIp = String(raw.cloudExitIp || '').trim();
+  const rawPublicIp = String(raw.publicIp || '').trim();
+  const cloudDns = String(raw.cloudDns || '').trim();
+
+  const publicIp = directIp || rawPublicIp || cloudExitIp;
+  if (!publicIp && !cloudDns) return null;
+
+  return {
+    publicIp,
+    ...(directIp ? { directIp } : {}),
+    ...(directInterface ? { directInterface } : {}),
+    ...(cloudExitIp ? { cloudExitIp } : {}),
+    cloudDns,
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+  };
+}
+
+/**
+ * Generates universal RouterOS v6 & v7 command to fetch BOTH:
+ * 1) Direct Interface Public IP from /ip address (excluding private/CGNAT/loopback ranges)
+ * 2) Cloud Exit IP & DDNS from /ip cloud
+ * and push them to Firebase RTDB public_info.json with Direct Interface IP prioritized as primary publicIp.
  */
 export function buildFetchPublicIpCommand(tenantUuid: string, routerId: string): string {
   const endpoint = `${getRouterCloudBase(tenantUuid, routerId)}/public_info.json`;
-  return `/ip cloud set ddns-enabled=yes; /ip cloud force-update; :delay 2s; :local ip [/ip cloud get public-address]; :local dns [/ip cloud get dns-name]; /tool fetch mode=https url="${endpoint}" http-method=put http-header-field="Content-Type: application/json" http-data=("{\\"publicIp\\":\\"" . $ip . "\\",\\"cloudDns\\":\\"" . $dns . "\\",\\"updatedAt\\":{\\".sv\\":\\"timestamp\\"}}") output=none`;
+  return [
+    `:do { /ip cloud set ddns-enabled=yes } on-error={}`,
+    `:do { /ip cloud force-update; :delay 2s } on-error={}`,
+    `:local cloudIp ""; :local dns ""`,
+    `:do { :set cloudIp [:tostr [/ip cloud get public-address]] } on-error={}`,
+    `:do { :set dns [:tostr [/ip cloud get dns-name]] } on-error={}`,
+    `:local directIp ""; :local directIf ""`,
+    `:do {`,
+    `  :foreach a in=[/ip address find disabled=no] do={`,
+    `    :if ($directIp = "") do={`,
+    `      :local cidr [:tostr [/ip address get $a address]]`,
+    `      :local sl [:find $cidr "/"]`,
+    `      :local addr $cidr`,
+    `      :if ([:typeof $sl] = "num") do={ :set addr [:pick $cidr 0 $sl] }`,
+    `      :local d1 [:find $addr "."]`,
+    `      :if ([:typeof $d1] = "num") do={`,
+    `        :local rest [:pick $addr ($d1 + 1) [:len $addr]]`,
+    `        :local d2 [:find $rest "."]`,
+    `        :if ([:typeof $d2] = "num") do={`,
+    `          :local o1 [:tonum [:pick $addr 0 $d1]]`,
+    `          :local o2 [:tonum [:pick $rest 0 $d2]]`,
+    `          :if ([:typeof $o1] = "num" && [:typeof $o2] = "num") do={`,
+    `            :if ($o1 != 0 && $o1 != 10 && $o1 != 127 && !($o1 = 100 && $o2 >= 64 && $o2 <= 127) && !($o1 = 169 && $o2 = 254) && !($o1 = 172 && $o2 >= 16 && $o2 <= 31) && !($o1 = 192 && $o2 = 168) && $o1 < 224) do={`,
+    `              :set directIp $addr`,
+    `              :set directIf [:tostr [/ip address get $a interface]]`,
+    `            }`,
+    `          }`,
+    `        }`,
+    `      }`,
+    `    }`,
+    `  }`,
+    `} on-error={}`,
+    `:local primaryIp $directIp`,
+    `:if ($primaryIp = "") do={ :set primaryIp $cloudIp }`,
+    `:local payload ("{\\"publicIp\\":\\"" . $primaryIp . "\\",\\"directIp\\":\\"" . $directIp . "\\",\\"directInterface\\":\\"" . $directIf . "\\",\\"cloudExitIp\\":\\"" . $cloudIp . "\\",\\"cloudDns\\":\\"" . $dns . "\\",\\"updatedAt\\":{\\".sv\\":\\"timestamp\\"}}")`,
+    `/tool fetch mode=https url="${endpoint}" http-method=put http-header-field="Content-Type: application/json" http-data=$payload output=none`,
+  ].join('\n');
 }
 
 // === 2. MikroTik L2TP/IPSec VPN (Universal v6 & v7 + Safe Undo) ===

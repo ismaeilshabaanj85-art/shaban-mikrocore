@@ -390,6 +390,9 @@ export interface SandboxState {
 
 export interface RouterPublicInfo {
   publicIp: string;
+  directIp?: string;
+  directInterface?: string;
+  cloudExitIp?: string;
   cloudDns: string;
   updatedAt?: number;
 }

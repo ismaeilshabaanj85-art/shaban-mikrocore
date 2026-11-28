@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  analyzeRouterPublicInfo,
   buildFetchPublicIpCommand,
   buildL2tpVpnDisableCommand,
   buildL2tpVpnEnableCommand,
@@ -17,9 +18,25 @@ import {
   classifyPublicIpStatus,
   generateCiscoAutoQosCli,
   generateCiscoRoutingEnterpriseCli,
+  isPublicRoutableIpv4,
+  normalizeRouterPublicInfo,
+  resolvePrimaryWinboxVpnHost,
 } from './enterpriseToolsEngine';
 
-test('classifyPublicIpStatus differentiates Direct Public, CGNAT/Starlink, and Private LAN', () => {
+test('isPublicRoutableIpv4 and classifyPublicIpStatus exclude RFC1918, CGNAT, loopback, link-local, and zero IPs', () => {
+  assert.equal(isPublicRoutableIpv4('10.0.0.1'), false);
+  assert.equal(isPublicRoutableIpv4('172.16.5.1'), false);
+  assert.equal(isPublicRoutableIpv4('172.31.255.1'), false);
+  assert.equal(isPublicRoutableIpv4('172.32.0.1'), true);
+  assert.equal(isPublicRoutableIpv4('192.168.88.1'), false);
+  assert.equal(isPublicRoutableIpv4('100.64.0.1'), false);
+  assert.equal(isPublicRoutableIpv4('100.127.255.254'), false);
+  assert.equal(isPublicRoutableIpv4('100.128.0.1'), true);
+  assert.equal(isPublicRoutableIpv4('127.0.0.1'), false);
+  assert.equal(isPublicRoutableIpv4('169.254.1.10'), false);
+  assert.equal(isPublicRoutableIpv4('0.0.0.0'), false);
+  assert.equal(isPublicRoutableIpv4('185.44.120.77'), true);
+
   const starlink = classifyPublicIpStatus('100.84.192.45');
   assert.equal(starlink.classification, 'cgnat_starlink');
   assert.equal(starlink.isDirectPublic, false);
@@ -33,12 +50,55 @@ test('classifyPublicIpStatus differentiates Direct Public, CGNAT/Starlink, and P
   assert.equal(pub.isDirectPublic, true);
 });
 
-test('buildFetchPublicIpCommand generates universal cloud DDNS & RTDB public_info push', () => {
+test('buildFetchPublicIpCommand fetches BOTH Direct Interface Public IP (/ip address) and Cloud Exit IP/DDNS', () => {
   const cmd = buildFetchPublicIpCommand('tenant-123', 'router-1');
   assert.match(cmd, /\/ip cloud set ddns-enabled=yes/);
   assert.match(cmd, /\/ip cloud force-update/);
+  assert.match(cmd, /\/ip address find disabled=no/);
+  assert.match(cmd, /\$o1 != 10/);
+  assert.match(cmd, /\$o1 = 100 && \$o2 >= 64 && \$o2 <= 127/);
+  assert.match(cmd, /\$o1 = 172 && \$o2 >= 16 && \$o2 <= 31/);
+  assert.match(cmd, /\$o1 = 192 && \$o2 = 168/);
+  assert.match(cmd, /"directIp\\":/);
+  assert.match(cmd, /"directInterface\\":/);
+  assert.match(cmd, /"cloudExitIp\\":/);
+  assert.match(cmd, /:local primaryIp \$directIp/);
   assert.match(cmd, /routers\/tenant-123\/router-1\/public_info\.json/);
   assert.match(cmd, /http-method=put/);
+});
+
+test('analyzeRouterPublicInfo, normalizeRouterPublicInfo, and resolvePrimaryWinboxVpnHost prioritize Direct Interface IP over Starlink/CGNAT Cloud Exit', () => {
+  const multiWan = analyzeRouterPublicInfo({
+    publicIp: '185.44.120.77',
+    directIp: '185.44.120.77',
+    directInterface: 'ether2-PublicWAN',
+    cloudExitIp: '100.84.192.45',
+    cloudDns: 'abc123.sn.mynetname.net',
+  });
+  assert.equal(multiWan.primaryIp, '185.44.120.77');
+  assert.equal(multiWan.isDirectPublic, true);
+  assert.equal(multiWan.hasDirectInterfaceIp, true);
+  assert.equal(multiWan.hasMultiWanHybrid, true);
+  assert.equal(multiWan.cloudExitIp, '100.84.192.45');
+
+  // Even if legacy cached publicIp held CGNAT IP, directIp must elevate to primary
+  const normalized = normalizeRouterPublicInfo({
+    publicIp: '100.84.192.45',
+    directIp: '185.44.120.77',
+    directInterface: 'ether2-PublicWAN',
+    cloudExitIp: '100.84.192.45',
+    cloudDns: 'abc123.sn.mynetname.net',
+  });
+  assert.equal(normalized?.publicIp, '185.44.120.77');
+  assert.equal(resolvePrimaryWinboxVpnHost(normalized, '192.168.88.1'), '185.44.120.77');
+
+  // When no directIp exists (pure Starlink CGNAT), fall back to cloudDns then cloudExitIp
+  const pureStarlink = normalizeRouterPublicInfo({
+    publicIp: '100.84.192.45',
+    cloudExitIp: '100.84.192.45',
+    cloudDns: 'starlink1.sn.mynetname.net',
+  });
+  assert.equal(resolvePrimaryWinboxVpnHost(pureStarlink, '192.168.88.1'), 'starlink1.sn.mynetname.net');
 });
 
 test('L2TP VPN enable and disable commands use MikroCore_VPN tag and universal v6/v7 syntax', () => {
