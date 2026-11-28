@@ -106,6 +106,11 @@ test('One-Line Connector emits universal v6 & v7 MikroCore_CloudAgent script wit
   assert.equal(v7Conn.includes('http-method=delete'), true);
   assert.equal(v7Conn.includes('/ip hotspot active print count-only'), true);
   assert.equal(v7Conn.includes('/ppp active print count-only'), true);
+  assert.equal(v7Conn.includes(':foreach h in=[/system health find] do={'), true);
+  assert.equal(v7Conn.includes('/system health get \\$h name'), true);
+  assert.equal(v7Conn.includes('/system health get \\$h value'), true);
+  assert.equal(v7Conn.includes('/system health get [find'), false);
+  assert.equal(v7Conn.includes('/system health get temperature'), false);
 });
 
 test('NOC 1-click command builders emit safe sanitized RouterOS commands', () => {
