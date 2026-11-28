@@ -111,6 +111,8 @@ test('One-Line Connector emits universal v6 & v7 MikroCore_CloudAgent script wit
   assert.equal(v7Conn.includes('/system health get \\$h value'), true);
   assert.equal(v7Conn.includes('/system health get [find'), false);
   assert.equal(v7Conn.includes('/system health get temperature'), false);
+  assert.equal(v7Conn.includes('/interface find type=\\"bridge\\" running=yes disabled=no'), true);
+  assert.equal(v7Conn.includes('\\$it = \\"ether\\" || \\$it = \\"pppoe-out\\" || \\$it = \\"vlan\\"'), true);
 });
 
 test('NOC 1-click command builders emit safe sanitized RouterOS commands', () => {
