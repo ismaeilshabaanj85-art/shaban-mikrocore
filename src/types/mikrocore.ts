@@ -77,14 +77,33 @@ export interface NocTelemetry {
   ramUsedPercent: number;
   ramTotalMb: number;
   ramUsedMb: number;
-  temperatureC: number;
-  voltageV: number;
+  temperatureC: number | null;
+  voltageV: number | null;
   uptime: string;
   activeHotspot: number;
   activePppoe: number;
   rxMbps: number;
   txMbps: number;
+  pingMs?: number | null;
+  interfaces?: Array<{ name: string; running: boolean }>;
   history: Array<{ time: string; rx: number; tx: number }>;
+}
+
+export interface SystemBroadcast {
+  id: string;
+  title: string;
+  message: string;
+  timestamp: number;
+}
+
+export interface NocAlertItem {
+  id: string;
+  severity: 'warning' | 'critical';
+  titleAr: string;
+  titleEn: string;
+  detailAr: string;
+  detailEn: string;
+  timestamp: number;
 }
 
 export interface ZeroTouchConfig {
@@ -206,11 +225,19 @@ export interface CiscoConfig {
   enablePortSecurity: boolean;
   portSecMaxMac: number;
   portSecViolation: 'restrict' | 'shutdown' | 'protect';
-  routingMode: 'none' | 'static' | 'ospf';
+  routingMode: 'none' | 'static' | 'ospf' | 'bgp';
   defaultNextHop: string;
   ospfProcessId: number;
   ospfRouterId: string;
   ospfNetworks: string;
+  bgpAsn?: number;
+  bgpRouterId?: string;
+  bgpNeighborIp?: string;
+  bgpRemoteAsn?: number;
+  bgpNetworks?: string;
+  enableDhcpSnooping?: boolean;
+  enableDai?: boolean;
+  enableBpduGuard?: boolean;
   enableNatOverload: boolean;
   natInsideIf: string;
   natOutsideIf: string;
@@ -303,6 +330,18 @@ export interface CpeDevice {
   notes: string;
 }
 
+export interface PppoeSubscriber {
+  id: string;
+  clientName: string;
+  pppoeUsername: string;
+  phone: string;
+  monthlyFeeUsd: number;
+  expiryDate: string; // YYYY-MM-DD
+  speedLabel: string;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface TelegramBotConfig {
   enabled: boolean;
   botToken: string;
@@ -310,6 +349,9 @@ export interface TelegramBotConfig {
   notifyTowerDown: boolean;
   notifyDailyBackup: boolean;
   enableResellerVending: boolean;
+  enableBatteryGuard?: boolean;
+  lowVoltageThreshold?: number;
+  secondaryPortsToShutdown?: string;
 }
 
 export interface SandboxInterface {

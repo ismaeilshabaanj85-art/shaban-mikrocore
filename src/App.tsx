@@ -9,18 +9,25 @@ import {
   GeneratedVoucher,
   Language,
   ModuleId,
+  NocAlertItem,
+  PppoeSubscriber,
   ResellerAccount,
   RouterProfile,
   SandboxState,
   SessionUser,
   SpeedProfile,
+  SystemBroadcast,
   TelegramBotConfig,
   TowerNode,
 } from './types/mikrocore';
 import { generateUUID } from './utils/security';
 import {
+  RouterCloudInventory,
   RouterCloudTelemetry,
+  cloudFetchRouterInventory,
   cloudFetchRouterTelemetry,
+  cloudFetchSystemBroadcast,
+  evaluateRouterAlerts,
 } from './utils/firebaseCloud';
 import {
   getDefaultPortalConfig,
@@ -32,6 +39,7 @@ import {
   loadTenantRates,
   loadTenantResellers,
   loadTenantRouters,
+  loadTenantSubscribers,
   loadTenantTelegram,
   loadTenantTowers,
   loadTenantTransactions,
@@ -44,6 +52,7 @@ import {
   saveTenantRates,
   saveTenantResellers,
   saveTenantRouters,
+  saveTenantSubscribers,
   saveTenantTelegram,
   saveTenantTowers,
   saveTenantTransactions,
@@ -86,7 +95,19 @@ export default function App() {
   const [pendingSandboxScript, setPendingSandboxScript] = useState('');
   const [promoteNotice, setPromoteNotice] = useState('');
   const [liveTelemetry, setLiveTelemetry] = useState<RouterCloudTelemetry | null>(null);
+  const [liveInventory, setLiveInventory] = useState<RouterCloudInventory | null>(null);
+  const [nocAlerts, setNocAlerts] = useState<NocAlertItem[]>([]);
+  const [systemBroadcast, setSystemBroadcast] = useState<SystemBroadcast | null>(null);
+  const [dismissedBroadcastId, setDismissedBroadcastId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('mikrocore_dismissed_broadcast_id') || '';
+    } catch {
+      return '';
+    }
+  });
   const userForcedSandboxRef = useRef(false);
+  const wasConnectedRef = useRef(false);
+  const lastAlertKeysRef = useRef<string>('');
 
   // Tenant-isolated state (Part 1)
   const [routers, setRouters] = useState<RouterProfile[]>(() =>
@@ -124,6 +145,9 @@ export default function App() {
   const [cpes, setCpes] = useState<CpeDevice[]>(() =>
     user ? loadTenantCpes(user.tenantUuid) : []
   );
+  const [subscribers, setSubscribers] = useState<PppoeSubscriber[]>(() =>
+    user ? loadTenantSubscribers(user.tenantUuid) : []
+  );
   const [telegram, setTelegram] = useState<TelegramBotConfig>(() =>
     user
       ? loadTenantTelegram(user.tenantUuid)
@@ -134,6 +158,9 @@ export default function App() {
           notifyTowerDown: true,
           notifyDailyBackup: true,
           enableResellerVending: true,
+          enableBatteryGuard: true,
+          lowVoltageThreshold: 22.5,
+          secondaryPortsToShutdown: 'ether4,ether5',
         }
   );
   const [sandboxState, setSandboxState] = useState<SandboxState>(() =>
@@ -159,6 +186,7 @@ export default function App() {
     setRates(loadTenantRates(tenantUuid));
     setTowers(loadTenantTowers(tenantUuid));
     setCpes(loadTenantCpes(tenantUuid));
+    setSubscribers(loadTenantSubscribers(tenantUuid));
     setTelegram(loadTenantTelegram(tenantUuid));
   }, []);
 
@@ -198,12 +226,34 @@ export default function App() {
     [user]
   );
 
-  // Poll Firebase Cloud Agent telemetry for the active router when viewing NOC/Connection or in Live mode
+  // Poll Firebase Cloud Agent telemetry (and evaluate Smart NOC alerts)
   useEffect(() => {
     if (!user || !activeRouter) return;
     if (activeModule !== 'noc' && activeModule !== 'connection' && mode !== 'live') return;
 
     let cancelled = false;
+
+    const triggerChime = () => {
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(740, ctx.currentTime);
+        gain.gain.setValueAtTime(0.06, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.26);
+      } catch {
+        // ignore autoplay restrictions
+      }
+    };
 
     const pollTelemetry = async () => {
       const res = await cloudFetchRouterTelemetry(user.tenantUuid, activeRouter.id);
@@ -212,6 +262,35 @@ export default function App() {
       if (res.telemetry && res.isFresh) {
         const tel = res.telemetry;
         setLiveTelemetry(tel);
+
+        const nextAlerts = evaluateRouterAlerts({
+          telemetry: tel,
+          routerName: activeRouter.name,
+          isConnected: true,
+          wasConnected: wasConnectedRef.current,
+          lowVoltageThreshold:
+            telegram.enableBatteryGuard !== false ? telegram.lowVoltageThreshold ?? 22.5 : undefined,
+        });
+        wasConnectedRef.current = true;
+        setNocAlerts(nextAlerts);
+
+        const alertSig = nextAlerts.map((a) => a.id).join('|');
+        if (alertSig && alertSig !== lastAlertKeysRef.current) {
+          lastAlertKeysRef.current = alertSig;
+          triggerChime();
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try {
+              const first = nextAlerts[0];
+              new Notification(lang === 'ar' ? first.titleAr : first.titleEn, {
+                body: lang === 'ar' ? first.detailAr : first.detailEn,
+              });
+            } catch {
+              // ignore notification error
+            }
+          }
+        } else if (!alertSig) {
+          lastAlertKeysRef.current = '';
+        }
 
         setRouters((prev) => {
           const target = prev.find((r) => r.id === activeRouter.id);
@@ -239,6 +318,17 @@ export default function App() {
         }
       } else if (!res.isFresh) {
         setLiveTelemetry(null);
+        const offlineAlerts = evaluateRouterAlerts({
+          telemetry: null,
+          routerName: activeRouter.name,
+          isConnected: false,
+          wasConnected: wasConnectedRef.current,
+        });
+        if (wasConnectedRef.current) {
+          wasConnectedRef.current = false;
+          setNocAlerts(offlineAlerts);
+          if (offlineAlerts.length > 0) triggerChime();
+        }
         if (mode === 'live') {
           setRouters((prev) => {
             const target = prev.find((r) => r.id === activeRouter.id);
@@ -259,7 +349,58 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
+  }, [
+    user,
+    activeRouter?.id,
+    activeRouter?.name,
+    activeModule,
+    mode,
+    lang,
+    telegram.enableBatteryGuard,
+    telegram.lowVoltageThreshold,
+  ]);
+
+  // Fetch cached Heavy Inventory when viewing NOC in Live mode
+  useEffect(() => {
+    if (!user || !activeRouter || activeModule !== 'noc' || mode !== 'live') return;
+    let cancelled = false;
+    (async () => {
+      const invRes = await cloudFetchRouterInventory(user.tenantUuid, activeRouter.id);
+      if (!cancelled && invRes.ok && invRes.inventory) {
+        setLiveInventory(invRes.inventory);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user, activeRouter?.id, activeModule, mode]);
+
+  // Poll Global Owner Update Broadcast for all authenticated devices
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const checkBroadcast = async () => {
+      const res = await cloudFetchSystemBroadcast();
+      if (!cancelled && res.ok && res.broadcast) {
+        setSystemBroadcast(res.broadcast);
+      }
+    };
+    void checkBroadcast();
+    const timer = setInterval(checkBroadcast, 45_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user]);
+
+  const handleDismissBroadcast = (id: string) => {
+    setDismissedBroadcastId(id);
+    try {
+      localStorage.setItem('mikrocore_dismissed_broadcast_id', id);
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   const handleSaveCustomProfiles = (nextProfiles: SpeedProfile[]) => {
     setCustomProfiles(nextProfiles);
@@ -299,6 +440,11 @@ export default function App() {
   const handleSaveCpes = (next: CpeDevice[]) => {
     setCpes(next);
     if (user) saveTenantCpes(user.tenantUuid, next);
+  };
+
+  const handleSaveSubscribers = (next: PppoeSubscriber[]) => {
+    setSubscribers(next);
+    if (user) saveTenantSubscribers(user.tenantUuid, next);
   };
 
   const handleSaveTelegram = (next: TelegramBotConfig) => {
@@ -416,6 +562,30 @@ export default function App() {
 
         <main className="flex-1 min-w-0 p-4 sm:p-6 pb-8 overflow-x-hidden">
           <div className="mx-auto max-w-6xl space-y-4">
+            {systemBroadcast && systemBroadcast.id !== dismissedBroadcastId && (
+              <div
+                role="status"
+                className="noc-glass flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-cyan-400/45 bg-gradient-to-r from-cyan-500/15 via-[#0B142B]/95 to-emerald-500/15 px-4 py-3 shadow-[0_0_24px_rgba(0,229,255,0.16)]"
+              >
+                <div className="space-y-1 min-w-0">
+                  <p className="text-xs font-extrabold text-cyan-300">
+                    {lang === 'ar'
+                      ? 'تم إصدار تحديث جديد من المالك إسماعيل شعبان'
+                      : 'New Update Released by Owner Ismaeil Shaban'}
+                  </p>
+                  <p className="text-sm font-bold text-white">{systemBroadcast.title}</p>
+                  <p className="text-xs text-slate-200 leading-relaxed">{systemBroadcast.message}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDismissBroadcast(systemBroadcast.id)}
+                  className="self-start sm:self-center shrink-0 rounded-xl border border-cyan-400/40 bg-[#050A18]/80 px-3.5 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500/20 cursor-pointer whitespace-nowrap"
+                >
+                  {lang === 'ar' ? 'إغلاق الإشعار' : 'Dismiss'}
+                </button>
+              </div>
+            )}
+
             {promoteNotice && (
               <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-xs font-semibold text-emerald-200">
                 {promoteNotice}
@@ -429,6 +599,9 @@ export default function App() {
                 activeRouter={activeRouter}
                 tenantUuid={user.tenantUuid}
                 liveTelemetry={liveTelemetry}
+                liveInventory={liveInventory}
+                nocAlerts={mode === 'live' ? nocAlerts : []}
+                onInventoryUpdated={(inv) => setLiveInventory(inv)}
                 onQuickBackup={handleQuickBackup}
               />
             )}
@@ -467,6 +640,8 @@ export default function App() {
                 mode={mode}
                 activeRouter={activeRouter}
                 tenantUuid={user.tenantUuid}
+                portalNetworkName={portal.networkTitle}
+                portalSupportPhone={portal.supportPhone1}
                 customProfiles={customProfiles}
                 onSaveCustomProfiles={handleSaveCustomProfiles}
                 vouchers={vouchers}
@@ -480,6 +655,7 @@ export default function App() {
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
                 onSaveToVault={handleSaveToVault}
               />
             )}
@@ -489,6 +665,7 @@ export default function App() {
                 lang={lang}
                 mode={mode}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
                 onSaveToVault={handleSaveToVault}
               />
             )}
@@ -520,6 +697,12 @@ export default function App() {
                 onSaveTransactions={handleSaveTransactions}
                 rates={rates}
                 onSaveRates={handleSaveRates}
+                subscribers={subscribers}
+                onSaveSubscribers={handleSaveSubscribers}
+                activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
+                mode={mode}
+                networkTitle={portal.networkTitle}
               />
             )}
 
@@ -543,6 +726,8 @@ export default function App() {
                 mode={mode}
                 user={user}
                 activeRouter={activeRouter}
+                tenantUuid={user.tenantUuid}
+                liveTelemetry={liveTelemetry}
                 towers={towers}
                 onSaveTowers={handleSaveTowers}
                 cpes={cpes}
@@ -590,7 +775,14 @@ export default function App() {
         onDeleteItem={handleDeleteVaultItem}
       />
 
-      <FloatingAssistant lang={lang} onNavigateModule={setActiveModule} />
+      <FloatingAssistant
+        lang={lang}
+        mode={mode}
+        activeRouter={activeRouter}
+        tenantUuid={user.tenantUuid}
+        liveTelemetry={liveTelemetry}
+        onNavigateModule={setActiveModule}
+      />
       <OfflineIndicator lang={lang} />
     </div>
   );

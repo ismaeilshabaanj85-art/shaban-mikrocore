@@ -6,9 +6,11 @@ import {
   CloudOff,
   Download,
   Edit3,
+  Megaphone,
   MessageCircle,
   Plus,
   RefreshCw,
+  Send,
   Shield,
   Trash2,
   Upload,
@@ -27,7 +29,9 @@ import { generateUUID, sanitizeInput, sha256Hex } from '../utils/security';
 import {
   cloudDeleteTenant,
   cloudFetchAllTenants,
+  cloudFetchSystemBroadcast,
   cloudPatchTenant,
+  cloudPublishSystemBroadcast,
   cloudPutTenant,
 } from '../utils/firebaseCloud';
 import {
@@ -66,6 +70,16 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
   });
   const [statusMsg, setStatusMsg] = useState('');
   const [cloudState, setCloudState] = useState<'syncing' | 'synced' | 'offline'>('syncing');
+  const [broadcastTitle, setBroadcastTitle] = useState('تحديث جديد لمنصة Shaban MikroCore');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastPublishing, setBroadcastPublishing] = useState(false);
+  const [broadcastStatus, setBroadcastStatus] = useState('');
+  const [activeBroadcast, setActiveBroadcast] = useState<{
+    id: string;
+    title: string;
+    message: string;
+    timestamp: number;
+  } | null>(null);
 
   const syncFromCloud = useCallback(async (showFeedback = false) => {
     setCloudState('syncing');
@@ -96,7 +110,10 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
   useEffect(() => {
     let active = true;
     (async () => {
-      const res = await cloudFetchAllTenants();
+      const [res, bcRes] = await Promise.all([
+        cloudFetchAllTenants(),
+        cloudFetchSystemBroadcast(),
+      ]);
       if (!active) return;
       if (res.ok) {
         saveCustomers(res.tenants);
@@ -105,11 +122,54 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
       } else {
         setCloudState('offline');
       }
+      if (bcRes.ok && bcRes.broadcast) {
+        setActiveBroadcast(bcRes.broadcast);
+      }
     })();
     return () => {
       active = false;
     };
   }, []);
+
+  const handlePublishBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastTitle.trim() || !broadcastMessage.trim()) {
+      setBroadcastStatus(
+        lang === 'ar'
+          ? 'يرجى إدخال عنوان التحديث وتفاصيل الإشعار.'
+          : 'Please enter both broadcast title and message.'
+      );
+      return;
+    }
+    setBroadcastPublishing(true);
+    setBroadcastStatus('');
+    const res = await cloudPublishSystemBroadcast(broadcastTitle, broadcastMessage);
+    setBroadcastPublishing(false);
+    if (res.ok && res.broadcast) {
+      setActiveBroadcast(res.broadcast);
+      setBroadcastMessage('');
+      setLogs(
+        appendAuditLog({
+          actor: 'ismaeil',
+          tenantUuid: 'global',
+          action: 'SYSTEM_BROADCAST_PUBLISHED',
+          severity: 'info',
+          details: `Broadcast "${res.broadcast.title}" sent to all clients`,
+        })
+      );
+      setBroadcastStatus(
+        lang === 'ar'
+          ? 'تم إرسال إشعار التحديث العام لجميع أجهزة المشتركين بنجاح! 📢'
+          : 'Global update broadcast sent to all subscriber devices! 📢'
+      );
+    } else {
+      setBroadcastStatus(
+        lang === 'ar'
+          ? `تعذر إرسال الإشعار العام (${res.error || 'خطأ شبكة'}).`
+          : `Failed to publish broadcast (${res.error || 'network error'}).`
+      );
+    }
+  };
 
   const handleSaveSubscription = (e: React.FormEvent) => {
     e.preventDefault();
@@ -465,6 +525,81 @@ export const SuperAdminPanel: React.FC<SuperAdminPanelProps> = ({ lang }) => {
           </label>
         </div>
       </div>
+
+      {/* Global Owner Update Broadcast Box */}
+      <form onSubmit={handlePublishBroadcast} className="noc-glass rounded-2xl p-5 space-y-3 border border-cyan-400/35">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-bold text-cyan-300 flex items-center gap-2">
+            <Megaphone className="h-4 w-4 text-amber-300" />
+            <span>
+              {lang === 'ar'
+                ? 'إرسال إشعار تحديث عام لجميع المشتركين 📢'
+                : 'Send Global Update Broadcast to All Subscribers 📢'}
+            </span>
+          </h3>
+          {activeBroadcast && (
+            <span className="text-[11px] font-mono text-slate-400">
+              {lang === 'ar' ? 'آخر بث:' : 'Latest:'}{' '}
+              {new Date(activeBroadcast.timestamp).toLocaleString()}
+            </span>
+          )}
+        </div>
+
+        {broadcastStatus && (
+          <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200">
+            {broadcastStatus}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold text-slate-400">
+              {lang === 'ar' ? 'عنوان التحديث' : 'Update Title'}
+            </label>
+            <input
+              type="text"
+              value={broadcastTitle}
+              onChange={(e) => setBroadcastTitle(e.target.value)}
+              placeholder={lang === 'ar' ? 'تحديث جديد في النظام' : 'System Update'}
+              className="w-full rounded-xl border border-slate-700 bg-[#050A18]/90 px-3 py-2 text-xs text-white outline-none focus:border-cyan-400"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="mb-1 block text-[11px] font-semibold text-slate-400">
+              {lang === 'ar' ? 'رسالة التحديث للمشتركين' : 'Broadcast Message'}
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={broadcastMessage}
+                onChange={(e) => setBroadcastMessage(e.target.value)}
+                placeholder={
+                  lang === 'ar'
+                    ? 'اكتب تفاصيل التحديث أو الميزة الجديدة لتظهر فوراً في أجهزة جميع المشتركين...'
+                    : 'Write update details to show across all customer devices...'
+                }
+                className="flex-1 rounded-xl border border-slate-700 bg-[#050A18]/90 px-3 py-2 text-xs text-white outline-none focus:border-cyan-400"
+              />
+              <button
+                type="submit"
+                disabled={broadcastPublishing}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-cyan-400 px-4 py-2 text-xs font-bold text-slate-950 hover:brightness-110 disabled:opacity-60 cursor-pointer whitespace-nowrap"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>
+                  {broadcastPublishing
+                    ? lang === 'ar'
+                      ? 'جارٍ الإرسال...'
+                      : 'Broadcasting...'
+                    : lang === 'ar'
+                    ? 'إرسال إشعار تحديث عام لجميع المشتركين 📢'
+                    : 'Broadcast Global Update 📢'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
 
       {/* Subscription & Contact Settings */}
       <form onSubmit={handleSaveSubscription} className="noc-glass rounded-2xl p-5 space-y-3">

@@ -1,20 +1,33 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  CalendarClock,
   Coins,
   Download,
+  MessageCircle,
+  Play,
   Plus,
   Printer,
+  RefreshCw,
   Store,
+  Trash2,
   TrendingUp,
 } from 'lucide-react';
 import {
+  AppMode,
   CurrencyCode,
   ExchangeRates,
   FinanceTransaction,
   Language,
+  PppoeSubscriber,
   ResellerAccount,
+  RouterProfile,
 } from '../../types/mikrocore';
+import {
+  buildPppoeExpiryRedirectCommand,
+  buildWhatsAppBillingUrl,
+} from '../../engine/networkEngine';
+import { cloudSendAndAwaitRouterCommand } from '../../utils/firebaseCloud';
 import { generateUUID, sanitizeInput } from '../../utils/security';
 
 interface FinancePosModuleProps {
@@ -25,6 +38,12 @@ interface FinancePosModuleProps {
   onSaveTransactions: (list: FinanceTransaction[]) => void;
   rates: ExchangeRates;
   onSaveRates: (rates: ExchangeRates) => void;
+  subscribers?: PppoeSubscriber[];
+  onSaveSubscribers?: (list: PppoeSubscriber[]) => void;
+  activeRouter?: RouterProfile;
+  tenantUuid?: string;
+  mode?: AppMode;
+  networkTitle?: string;
 }
 
 export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
@@ -35,8 +54,14 @@ export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
   onSaveTransactions,
   rates,
   onSaveRates,
+  subscribers = [],
+  onSaveSubscribers,
+  activeRouter,
+  tenantUuid,
+  mode = 'sandbox',
+  networkTitle = 'Shaban Fiber & Starlink',
 }) => {
-  const [tab, setTab] = useState<'pos' | 'accounting'>('pos');
+  const [tab, setTab] = useState<'pos' | 'pppoe_billing' | 'accounting'>('pos');
   const [resellerName, setResellerName] = useState('');
   const [resellerPhone, setResellerPhone] = useState('');
   const [resellerComm, setResellerComm] = useState(10);
@@ -57,6 +82,19 @@ export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
   const [txDesc, setTxDesc] = useState('');
   const [txAmount, setTxAmount] = useState(75);
   const [txCurrency, setTxCurrency] = useState<CurrencyCode>('USD');
+
+  // PPPoE Home Billing form
+  const [subName, setSubName] = useState('');
+  const [subUser, setSubUser] = useState('');
+  const [subPhone, setSubPhone] = useState('+9639');
+  const [subFee, setSubFee] = useState(15);
+  const [subSpeed, setSubSpeed] = useState('10M/4M');
+  const [subExpiry, setSubExpiry] = useState(() =>
+    new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10)
+  );
+  const [billingRedirectIp, setBillingRedirectIp] = useState('192.168.88.1');
+  const [billingNotice, setBillingNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pushingSubId, setPushingSubId] = useState<string | null>(null);
 
   const toUsd = (amount: number, currency: CurrencyCode): number => {
     if (currency === 'USD') return amount;
@@ -243,7 +281,7 @@ export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-1 rounded-xl border border-cyan-500/25 bg-[#0B142B] p-1">
+        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-cyan-500/25 bg-[#0B142B] p-1">
           <button
             type="button"
             onClick={() => setTab('pos')}
@@ -253,6 +291,20 @@ export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
           >
             <Store className="h-3.5 w-3.5" />
             <span>{lang === 'ar' ? 'نقاط البيع والموزعون' : 'POS & Resellers'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('pppoe_billing')}
+            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-bold cursor-pointer ${
+              tab === 'pppoe_billing' ? 'bg-cyan-400 text-slate-950' : 'text-slate-300'
+            }`}
+          >
+            <CalendarClock className="h-3.5 w-3.5" />
+            <span>
+              {lang === 'ar'
+                ? 'فوترة المنزلي PPPoE وتنبيهات واتساب'
+                : 'PPPoE Home Billing & WhatsApp'}
+            </span>
           </button>
           <button
             type="button"
@@ -645,6 +697,331 @@ export const FinancePosModule: React.FC<FinancePosModuleProps> = ({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+      {tab === 'pppoe_billing' && (
+        <div className="space-y-5">
+          <div className="noc-glass rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-cyan-300 flex items-center gap-2">
+                  <CalendarClock className="h-4 w-4" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'إدارة اشتراكات المنزلي PPPoE والتذكير بضغطة زر عبر واتساب'
+                      : 'PPPoE Home Subscribers & 1-Click WhatsApp Renewal Reminder'}
+                  </span>
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? 'سجّل المشتركين المنزليين وأرسل رسالة تجديد جاهزة عبر واتساب أو ادفع قاعدة تحويل صفحة التذكير على الراوتر.'
+                    : 'Track home PPPoE subscribers, launch pre-filled Arabic WhatsApp reminders, and push billing expiry redirect rules.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'IP صفحة التذكير:' : 'Expiry Redirect IP:'}
+                </span>
+                <input
+                  type="text"
+                  value={billingRedirectIp}
+                  onChange={(e) => setBillingRedirectIp(e.target.value)}
+                  dir="ltr"
+                  className="w-32 rounded-xl border border-slate-700 bg-[#050A18] px-2.5 py-1.5 font-mono text-xs text-cyan-200"
+                />
+              </div>
+            </div>
+
+            {billingNotice && (
+              <div
+                className={`rounded-xl border px-4 py-2.5 text-xs font-semibold ${
+                  billingNotice.ok
+                    ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+                    : 'border-rose-500/40 bg-rose-500/15 text-rose-200'
+                }`}
+              >
+                {billingNotice.text}
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!onSaveSubscribers) return;
+                const cleanName = sanitizeInput(subName);
+                const cleanUser = sanitizeInput(subUser) || cleanName.replace(/\s+/g, '_').toLowerCase();
+                if (!cleanName || !cleanUser) return;
+                const created: PppoeSubscriber = {
+                  id: generateUUID(),
+                  clientName: cleanName,
+                  pppoeUsername: cleanUser,
+                  phone: sanitizeInput(subPhone) || '+963900000000',
+                  monthlyFeeUsd: Math.max(1, Number(subFee) || 10),
+                  expiryDate: subExpiry,
+                  speedLabel: sanitizeInput(subSpeed) || '10M/4M',
+                  createdAt: new Date().toISOString(),
+                };
+                onSaveSubscribers([created, ...subscribers]);
+                setSubName('');
+                setSubUser('');
+              }}
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end"
+            >
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'اسم المشترك' : 'Client Name'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={subName}
+                  onChange={(e) => setSubName(e.target.value)}
+                  placeholder={lang === 'ar' ? 'أحمد السعيد' : 'Ahmad Al-Saeed'}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'حساب PPPoE' : 'PPPoE Username'}
+                </label>
+                <input
+                  type="text"
+                  value={subUser}
+                  onChange={(e) => setSubUser(e.target.value)}
+                  placeholder="ppp_ahmad"
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'رقم الواتساب' : 'WhatsApp Phone'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={subPhone}
+                  onChange={(e) => setSubPhone(e.target.value)}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'الاشتراك الشهري ($)' : 'Monthly Fee ($)'}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={subFee}
+                  onChange={(e) => setSubFee(Number(e.target.value))}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">
+                  {lang === 'ar' ? 'تاريخ الانتهاء' : 'Expiry Date'}
+                </label>
+                <input
+                  type="date"
+                  value={subExpiry}
+                  onChange={(e) => setSubExpiry(e.target.value)}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <button
+                type="submit"
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-400 to-emerald-400 px-4 py-2 text-xs font-extrabold text-slate-950 cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>{lang === 'ar' ? 'إضافة مشترك' : 'Add Client'}</span>
+              </button>
+            </form>
+          </div>
+
+          <div className="noc-glass rounded-2xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-start text-xs">
+                <thead className="border-b border-slate-800 bg-slate-950/75 text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 text-start">{lang === 'ar' ? 'المشترك' : 'Subscriber'}</th>
+                    <th className="px-4 py-3 text-start">PPPoE</th>
+                    <th className="px-4 py-3 text-start">{lang === 'ar' ? 'الهاتف' : 'Phone'}</th>
+                    <th className="px-4 py-3 text-start">{lang === 'ar' ? 'الاشتراك' : 'Fee'}</th>
+                    <th className="px-4 py-3 text-start">{lang === 'ar' ? 'تاريخ الانتهاء' : 'Expiry'}</th>
+                    <th className="px-4 py-3 text-end">{lang === 'ar' ? 'إجراءات فورية' : 'Actions'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {subscribers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                        {lang === 'ar'
+                          ? 'لا يوجد مشتركون منزليون بعد.'
+                          : 'No home PPPoE subscribers added yet.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    subscribers.map((sub) => {
+                      const daysLeft = Math.ceil(
+                        (new Date(sub.expiryDate).getTime() - Date.now()) / 86400_000
+                      );
+                      const statusBadge =
+                        daysLeft < 0
+                          ? {
+                              label: lang === 'ar' ? 'منتهي' : 'Expired',
+                              cls: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+                            }
+                          : daysLeft <= 3
+                          ? {
+                              label: lang === 'ar' ? 'ينتهي قريباً' : 'Expiring Soon',
+                              cls: 'bg-amber-500/20 text-amber-200 border-amber-500/40',
+                            }
+                          : {
+                              label: lang === 'ar' ? 'نشط' : 'Active',
+                              cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+                            };
+                      const waUrl = buildWhatsAppBillingUrl(sub, networkTitle);
+                      return (
+                        <tr key={sub.id} className="hover:bg-slate-900/45">
+                          <td className="px-4 py-3 font-bold text-white">
+                            {sub.clientName}
+                            <p className="font-mono text-[10px] text-cyan-300">{sub.speedLabel}</p>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-slate-200" dir="ltr">
+                            {sub.pppoeUsername}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-slate-300" dir="ltr">
+                            {sub.phone}
+                          </td>
+                          <td className="px-4 py-3 font-mono font-bold text-emerald-300 tabular-nums" dir="ltr">
+                            ${sub.monthlyFeeUsd}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-slate-200 tabular-nums" dir="ltr">
+                                {sub.expiryDate}
+                              </span>
+                              <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusBadge.cls}`}>
+                                {statusBadge.label}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <a
+                                href={waUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/50 bg-emerald-500/20 px-2.5 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/30"
+                              >
+                                <MessageCircle className="h-3.5 w-3.5" />
+                                <span>{lang === 'ar' ? 'تذكير واتساب 💬' : 'WhatsApp 💬'}</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!onSaveSubscribers) return;
+                                  const base = Math.max(Date.now(), new Date(sub.expiryDate).getTime());
+                                  const nextExpiry = new Date(base + 30 * 86400_000)
+                                    .toISOString()
+                                    .slice(0, 10);
+                                  onSaveSubscribers(
+                                    subscribers.map((s) =>
+                                      s.id === sub.id ? { ...s, expiryDate: nextExpiry } : s
+                                    )
+                                  );
+                                  onSaveTransactions([
+                                    {
+                                      id: generateUUID(),
+                                      date: new Date().toISOString().slice(0, 10),
+                                      type: 'income',
+                                      category: 'PPPoE Home',
+                                      description: `${sub.clientName} (${sub.pppoeUsername}) +30d`,
+                                      amount: sub.monthlyFeeUsd,
+                                      currency: 'USD',
+                                      amountUsd: sub.monthlyFeeUsd,
+                                    },
+                                    ...transactions,
+                                  ]);
+                                  setBillingNotice({
+                                    ok: true,
+                                    text:
+                                      lang === 'ar'
+                                        ? `تم تجديد اشتراك ${sub.clientName} لمدة 30 يوماً حتى ${nextExpiry} وتسجيل الإيراد.`
+                                        : `Renewed ${sub.clientName} for 30 days until ${nextExpiry} and logged revenue.`,
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-200 hover:bg-cyan-500/25 cursor-pointer"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                <span>+30d</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={pushingSubId === sub.id}
+                                onClick={async () => {
+                                  const cmd = buildPppoeExpiryRedirectCommand(
+                                    sub.pppoeUsername,
+                                    billingRedirectIp,
+                                    activeRouter?.osVersion || 'v7'
+                                  );
+                                  if (mode !== 'live' || !tenantUuid || !activeRouter) {
+                                    setBillingNotice({
+                                      ok: true,
+                                      text:
+                                        lang === 'ar'
+                                          ? `تم تجهيز قاعدة تحويل صفحة انتهاء الاشتراك للمشترك ${sub.pppoeUsername} (${cmd.split('\n')[1]}).`
+                                          : `Prepared PPPoE expiry redirect command for ${sub.pppoeUsername}.`,
+                                    });
+                                    return;
+                                  }
+                                  setPushingSubId(sub.id);
+                                  const res = await cloudSendAndAwaitRouterCommand(
+                                    tenantUuid,
+                                    activeRouter.id,
+                                    cmd
+                                  );
+                                  setPushingSubId(null);
+                                  setBillingNotice({
+                                    ok: res.ok,
+                                    text: res.ok
+                                      ? lang === 'ar'
+                                        ? `تم تطبيق قاعدة تحويل انتهاء الاشتراك على الراوتر لحساب ${sub.pppoeUsername}! ✅`
+                                        : `Expiry redirect rule pushed for ${sub.pppoeUsername}! ✅`
+                                      : res.error || 'Push failed',
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-amber-400/45 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50 cursor-pointer"
+                              >
+                                <Play className="h-3 w-3" />
+                                <span>
+                                  {lang === 'ar' ? 'تحويل الانتهاء 🚀' : 'Expiry Redirect 🚀'}
+                                </span>
+                              </button>
+                              {onSaveSubscribers && (
+                                <button
+                                  type="button"
+                                  aria-label="Delete Subscriber"
+                                  onClick={() =>
+                                    onSaveSubscribers(subscribers.filter((s) => s.id !== sub.id))
+                                  }
+                                  className="rounded-lg p-1.5 text-slate-500 hover:text-rose-400 cursor-pointer"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

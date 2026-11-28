@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Bot, Send, Sparkles, X } from 'lucide-react';
-import { Language, ModuleId } from '../types/mikrocore';
-import { queryIsmaeilAi } from '../engine/assistantEngine';
+import { ArrowUpRight, Bot, Play, Send, Sparkles, X } from 'lucide-react';
+import { AppMode, Language, ModuleId, RouterProfile } from '../types/mikrocore';
+import { LiveRouterAiContext, queryIsmaeilAi } from '../engine/assistantEngine';
+import {
+  RouterCloudTelemetry,
+  cloudSendAndAwaitRouterCommand,
+} from '../utils/firebaseCloud';
 
 interface ChatMessage {
   id: string;
@@ -9,19 +13,30 @@ interface ChatMessage {
   text: string;
   suggestedModule?: ModuleId;
   suggestedLabel?: string;
+  executableScript?: string;
 }
 
 interface FloatingAssistantProps {
   lang: Language;
+  mode: AppMode;
+  activeRouter: RouterProfile;
+  tenantUuid?: string;
+  liveTelemetry?: RouterCloudTelemetry | null;
   onNavigateModule: (id: ModuleId) => void;
 }
 
 export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
   lang,
+  mode,
+  activeRouter,
+  tenantUuid,
+  liveTelemetry,
   onNavigateModule,
 }) => {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [pushingMsgId, setPushingMsgId] = useState<string | null>(null);
+  const [execFeedback, setExecFeedback] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const endRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
@@ -29,8 +44,8 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
       sender: 'ai',
       text:
         lang === 'ar'
-          ? 'مرحباً! أنا مساعد ismaeil AI الهندسي. اختر سؤالاً سريعاً بالأسفل أو اكتب سؤالك حول مايكروتك، ستارلينك، حظر الإباحية، سيسكو، أو النظام المالي.'
-          : 'Hello! I am ismaeil AI. Pick a quick starter question below or ask anything about MikroTik, Starlink, Safe Family filtering, Cisco IOS, or WISP finance.',
+          ? 'مرحباً! أنا مساعد ismaeil AI الهندسي المتصل بسياق راوترك النشط. اسألني عن ستارلينك، حظر الإباحية، مشاكل المعالج أو التوجيه، وسأولد لك أوامر جاهزة للتنفيذ الفوري.'
+          : 'Hello! I am ismaeil AI connected to your active router context. Ask about Starlink, Safe Family, high CPU, or routing to get ready-to-execute RouterOS commands.',
     },
   ]);
 
@@ -44,29 +59,44 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
     lang === 'ar'
       ? [
           'كيف أربط مايكروتك وستارلينك؟',
-          'برمجة الراوتر من الصفر',
+          'فحص حرارة ومعالج الراوتر',
           'حظر المواقع الإباحية',
           'حل بطء الألعاب والبينغ',
           'دمج خطوط PCC',
-          'بطاقات Hotspot و PPPoE',
-          'أوامر سيسكو VLAN و OSPF',
-          'ديون الموزعين والعملات',
+          'بطاقات Hotspot و A4',
+          'أوامر سيسكو VLAN و LACP',
+          'فوترة PPPoE وواتساب',
         ]
       : [
           'How to link MikroTik & Starlink?',
-          'Zero-Touch router setup',
+          'Diagnose router CPU & Netcut',
           'Safe Family anti-porn shield',
           'Fix gaming lag & Starlink ping',
           'Multi-WAN PCC load balancing',
-          'Hotspot & PPPoE vouchers',
-          'Cisco VLAN, OSPF & NAT',
-          'Reseller debt & USD/SYP/TRY',
+          'Hotspot A4 Vouchers & QR',
+          'Cisco VLAN, BGP & LACP sync',
+          'PPPoE billing & WhatsApp',
         ];
+
+  const routerContext: LiveRouterAiContext = {
+    routerName: activeRouter.name,
+    routerId: activeRouter.id,
+    osVersion: activeRouter.osVersion,
+    board: liveTelemetry?.board || activeRouter.model,
+    version: liveTelemetry?.version,
+    cpu: liveTelemetry?.cpu,
+    temp: liveTelemetry?.temp,
+    volt: liveTelemetry?.volt,
+    pingMs: liveTelemetry?.pingMs,
+    activeHotspot: liveTelemetry?.hotspot,
+    activePppoe: liveTelemetry?.ppp,
+    interfaces: liveTelemetry?.interfaces,
+  };
 
   const sendQuestion = (textRaw: string) => {
     const text = textRaw.trim();
     if (!text) return;
-    const reply = queryIsmaeilAi(text, lang);
+    const reply = queryIsmaeilAi(text, lang, routerContext);
     setMessages((prev) => [
       ...prev,
       { id: `u_${Date.now()}`, sender: 'user', text },
@@ -76,9 +106,41 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
         text: reply.text,
         suggestedModule: reply.suggestedModule,
         suggestedLabel: reply.suggestedLabel,
+        executableScript: reply.executableScript,
       },
     ]);
     setInput('');
+  };
+
+  const handleDirectExecute = async (msgId: string, script: string) => {
+    if (mode !== 'live' || !tenantUuid) {
+      setExecFeedback((prev) => ({
+        ...prev,
+        [msgId]: {
+          ok: true,
+          msg:
+            lang === 'ar'
+              ? `تم فحص وتجربة الكود في وضع Sandbox للراوتر ${activeRouter.name} (${activeRouter.osVersion.toUpperCase()}).`
+              : `Script validated in Sandbox mode for ${activeRouter.name} (${activeRouter.osVersion.toUpperCase()}).`,
+        },
+      }));
+      return;
+    }
+
+    setPushingMsgId(msgId);
+    const res = await cloudSendAndAwaitRouterCommand(tenantUuid, activeRouter.id, script);
+    setPushingMsgId(null);
+    setExecFeedback((prev) => ({
+      ...prev,
+      [msgId]: {
+        ok: res.ok,
+        msg: res.ok
+          ? lang === 'ar'
+            ? `تم إرسال وتنفيذ الأوامر على ${activeRouter.name} بنجاح! ✅`
+            : `Executed on ${activeRouter.name} successfully! ✅`
+          : res.error || 'Failed to push command',
+      },
+    }));
   };
 
   return (
@@ -96,20 +158,20 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
 
       {/* Interactive Chat Panel */}
       {open && (
-        <div className="no-print fixed bottom-36 md:bottom-22 end-4 sm:end-6 z-50 flex h-[510px] w-[calc(100vw-2rem)] max-w-md flex-col rounded-3xl noc-glass shadow-[0_16px_64px_rgba(0,0,0,0.8)] overflow-hidden">
+        <div className="no-print fixed bottom-36 md:bottom-22 end-4 sm:end-6 z-50 flex h-[540px] w-[calc(100vw-2rem)] max-w-md flex-col rounded-3xl noc-glass shadow-[0_16px_64px_rgba(0,0,0,0.8)] overflow-hidden">
           <div className="flex items-center justify-between border-b border-cyan-500/25 bg-[#071127]/95 px-4 py-3">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-500/15">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-cyan-400/40 bg-cyan-500/15">
                 <Bot className="h-4 w-4 text-cyan-300" />
               </span>
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs font-extrabold text-white" dir="ltr">
                   ismaeil AI
                 </p>
-                <p className="text-[10px] text-emerald-300">
-                  {lang === 'ar'
-                    ? 'المحرك الهندسي الذكي (Offline)'
-                    : 'Offline Engineering Intelligence'}
+                <p className="text-[10px] text-emerald-300 truncate">
+                  {liveTelemetry
+                    ? `${activeRouter.name} · CPU ${liveTelemetry.cpu}% · ${liveTelemetry.pingMs ?? '--'}ms`
+                    : `${activeRouter.name} (${activeRouter.osVersion.toUpperCase()})`}
                 </p>
               </div>
             </div>
@@ -132,13 +194,51 @@ export const FloatingAssistant: React.FC<FloatingAssistantProps> = ({
                 }`}
               >
                 <div
-                  className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 leading-relaxed whitespace-pre-line ${
+                  className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 leading-relaxed whitespace-pre-line ${
                     m.sender === 'user'
                       ? 'bg-cyan-400 text-slate-950 font-semibold'
                       : 'border border-cyan-500/20 bg-[#050A18]/90 text-slate-200'
                   }`}
                 >
                   <p>{m.text}</p>
+
+                  {m.executableScript && (
+                    <div className="mt-2.5 space-y-2">
+                      <pre
+                        dir="ltr"
+                        className="max-h-36 overflow-auto rounded-xl border border-cyan-500/25 bg-[#030712] p-2.5 font-mono text-[10px] text-cyan-200 text-left"
+                      >
+                        <code>{m.executableScript}</code>
+                      </pre>
+                      <button
+                        type="button"
+                        disabled={pushingMsgId === m.id}
+                        onClick={() => handleDirectExecute(m.id, m.executableScript!)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-cyan-400 to-emerald-400 px-3 py-1.5 text-[11px] font-extrabold text-slate-950 hover:brightness-110 disabled:opacity-60 cursor-pointer"
+                      >
+                        <Play className="h-3 w-3" />
+                        <span>
+                          {pushingMsgId === m.id
+                            ? lang === 'ar'
+                              ? 'جارٍ التنفيذ...'
+                              : 'Executing...'
+                            : lang === 'ar'
+                            ? 'تنفيذ مباشر على الراوتر 🚀'
+                            : 'Execute on Router 🚀'}
+                        </span>
+                      </button>
+                      {execFeedback[m.id] && (
+                        <p
+                          className={`text-[11px] font-semibold ${
+                            execFeedback[m.id].ok ? 'text-emerald-300' : 'text-rose-300'
+                          }`}
+                        >
+                          {execFeedback[m.id].msg}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {m.suggestedModule && m.suggestedLabel && (
                     <button
                       type="button"

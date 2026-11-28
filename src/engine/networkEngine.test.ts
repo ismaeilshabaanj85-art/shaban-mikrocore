@@ -3,10 +3,23 @@ import assert from 'node:assert/strict';
 import {
   MIKROCORE_BRIDGE_URL,
   PRESET_SPEED_PROFILES,
+  buildBanMacCommand,
+  buildCleanExpiredAccountsCommand,
+  buildDeleteAccountCommand,
+  buildGamingLatencyMatrixCommand,
+  buildKickSessionCommand,
+  buildPingDishCommand,
+  buildPppoeExpiryRedirectCommand,
+  buildSpeedLimitCommand,
+  buildToggleAccountCommand,
+  buildWhatsAppBillingUrl,
   executeRouterOsV7Rest,
   generateAntiNetcutSecurityShield,
   generateAutoRollbackGuard,
+  generateBatteryGuardScript,
+  generateCarrierCakeFqCodelScript,
   generateCiscoIosCli,
+  generateCiscoMikrotikLacpSync,
   generateMultiWanPcc,
   generateOneLineConnector,
   generateSafeFamilyRollbackScript,
@@ -14,6 +27,7 @@ import {
   generateSpeedProfileScript,
   generateStarlinkGamingOptimizer,
   generateVoucherBatch,
+  generateVrrpFailoverScript,
   generateZeroTouchBootstrap,
 } from './networkEngine';
 
@@ -74,13 +88,64 @@ test('One-Line Connector emits universal v6 & v7 MikroCore_CloudAgent script wit
     true
   );
   assert.equal(v7Conn, v6Conn);
-  assert.equal(v7Conn.includes('interval=15s'), true);
+  assert.equal(v7Conn.includes('interval=8s'), true);
   assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/telemetry.json'), true);
+  assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/inventory.json'), true);
   assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/command.json'), true);
+  assert.equal(v7Conn.includes('rxBps'), true);
+  assert.equal(v7Conn.includes('txBps'), true);
+  assert.equal(v7Conn.includes('pingMs'), true);
+  assert.equal(v7Conn.includes('active_sessions'), true);
+  assert.equal(v7Conn.includes('SYNC_INVENTORY'), true);
   assert.equal(v7Conn.includes('[:parse \\$clean]'), true);
   assert.equal(v7Conn.includes('http-method=delete'), true);
   assert.equal(v7Conn.includes('/ip hotspot active print count-only'), true);
   assert.equal(v7Conn.includes('/ppp active print count-only'), true);
+});
+
+test('NOC 1-click command builders emit safe sanitized RouterOS commands', () => {
+  assert.equal(
+    buildKickSessionCommand('hotspot', 'ali; /system reset'),
+    '/ip hotspot active remove [find user="ali/systemreset"]'
+  );
+  assert.equal(
+    buildKickSessionCommand('pppoe', 'user_ppp1'),
+    '/ppp active remove [find name="user_ppp1"]'
+  );
+
+  const banCmd = buildBanMacCommand('aa:bb:cc:dd:ee:ff', 'Intruder 1');
+  assert.equal(banCmd.includes('mac-address="AA:BB:CC:DD:EE:FF"'), true);
+  assert.equal(banCmd.includes('src-mac-address="AA:BB:CC:DD:EE:FF"'), true);
+
+  const queueLimit = buildSpeedLimitCommand('hotspot', 'ahmed', '4M/2M', '192.168.88.50');
+  assert.equal(queueLimit.includes('/queue simple add name="MC-Limit-ahmed" target="192.168.88.50/32" max-limit=4M/2M'), true);
+
+  const pppSecretLimit = buildSpeedLimitCommand('pppoe', 'sara', '8M/4M');
+  assert.equal(pppSecretLimit, '/ppp secret set [find name="sara"] rate-limit="8M/4M"');
+
+  assert.equal(
+    buildToggleAccountCommand('hotspot', 'card10', true),
+    '/ip hotspot user set [find name="card10"] disabled=yes'
+  );
+  assert.equal(
+    buildToggleAccountCommand('pppoe', 'home1', false),
+    '/ppp secret set [find name="home1"] disabled=no'
+  );
+
+  assert.equal(
+    buildDeleteAccountCommand('hotspot', 'card10').includes('/ip hotspot user remove [find name="card10"]'),
+    true
+  );
+  assert.equal(
+    buildDeleteAccountCommand('pppoe', 'home1').includes('/ppp secret remove [find name="home1"]'),
+    true
+  );
+
+  const cleanExpired = buildCleanExpiredAccountsCommand();
+  assert.equal(cleanExpired.includes('/ip hotspot user remove [find comment~"EXPIRED" || disabled=yes]'), true);
+  assert.equal(cleanExpired.includes('/ppp secret remove [find comment~"EXPIRED" || disabled=yes]'), true);
+
+  assert.equal(buildPingDishCommand('10.20.30.2'), '/tool ping address=10.20.30.2 count=4');
 });
 
 test('executeRouterOsV7Rest routes requests through Cloudflare Worker Bridge with http:// on port 80 and https:// on port 443', async () => {
@@ -301,3 +366,128 @@ test('Safe Family & Anti-Porn Shield + Rollback generate valid v6/v7 RouterOS sc
   assert.equal(v7Rollback.includes('use-doh-server=""'), true);
   assert.equal(v6Rollback.includes('use-doh-server=""'), false);
 });
+
+test('Phase 2 PPPoE Billing WhatsApp URL, Expiry Redirect, Battery Guard & Gaming Ping Matrix generate clean output', () => {
+  const waUrl = buildWhatsAppBillingUrl(
+    {
+      id: 'sub1',
+      clientName: 'أحمد السعيد',
+      pppoeUsername: 'ppp_ahmad',
+      phone: '+963 944-112-233',
+      monthlyFeeUsd: 15,
+      expiryDate: '2026-12-01',
+      speedLabel: '10M/4M',
+      createdAt: '2026-11-01T00:00:00.000Z',
+    },
+    'شبكة النجم السريع'
+  );
+  assert.equal(waUrl.startsWith('https://wa.me/963944112233?text='), true);
+  assert.equal(decodeURIComponent(waUrl).includes('ppp_ahmad'), true);
+  assert.equal(decodeURIComponent(waUrl).includes('$15'), true);
+
+  const expiryCmd = buildPppoeExpiryRedirectCommand('ppp_ahmad', '192.168.88.1', 'v7');
+  assert.equal(expiryCmd.includes('/ppp profile add name="EXPIRED_BILLING"'), true);
+  assert.equal(expiryCmd.includes('/ppp secret set [find name="ppp_ahmad"] profile="EXPIRED_BILLING"'), true);
+  assert.equal(expiryCmd.includes('to-addresses=192.168.88.1'), true);
+
+  const batteryScript = generateBatteryGuardScript({
+    osVersion: 'v7',
+    thresholdV: 22.5,
+    secondaryPorts: 'ether4,ether5',
+    botToken: '123:ABC',
+    chatId: '-100555',
+    routerName: 'Tower-North',
+  });
+  assert.equal(batteryScript.includes('MikroCore_BatteryGuard'), true);
+  assert.equal(batteryScript.includes('\\$tenths > 0 && \\$tenths < 225'), true);
+  assert.equal(batteryScript.includes('/interface set [find name=\\"ether4\\"] disabled=yes'), true);
+  assert.equal(batteryScript.includes('/interface set [find name=\\"ether5\\"] disabled=yes'), true);
+  assert.equal(batteryScript.includes('api.telegram.org/bot123:ABC'), true);
+
+  const pingMatrix = buildGamingLatencyMatrixCommand();
+  assert.equal(pingMatrix.includes('/tool ping 1.1.1.1 count=3'), true);
+  assert.equal(pingMatrix.includes('/tool ping 8.8.8.8 count=3'), true);
+});
+
+test('Phase 2 Cisco BGP, L2 Hardening, Cisco<->MikroTik LACP Sync, Carrier CAKE/FQ-Codel & VRRP generate valid CLI', () => {
+  const ciscoAdv = generateCiscoIosCli({
+    deviceType: 'switch_l3',
+    hostname: 'Core-BGP',
+    domainName: 'shaban.local',
+    enableSecret: 'Sec123',
+    sshUser: 'admin',
+    sshPassword: 'Pass123',
+    vlans: [{ id: 10, name: 'MGMT', subnet: '10.10.10.1 255.255.255.0' }],
+    accessPorts: 'Gi0/1-12',
+    accessVlanId: 10,
+    trunkPorts: 'Gi0/23-24',
+    nativeVlanId: 10,
+    enablePortSecurity: true,
+    portSecMaxMac: 2,
+    portSecViolation: 'restrict',
+    enableDhcpSnooping: true,
+    enableDai: true,
+    enableBpduGuard: true,
+    routingMode: 'bgp',
+    defaultNextHop: '',
+    ospfProcessId: 1,
+    ospfRouterId: '10.10.10.1',
+    ospfNetworks: '',
+    bgpAsn: 65010,
+    bgpRouterId: '10.10.10.1',
+    bgpNeighborIp: '172.16.0.1',
+    bgpRemoteAsn: 65001,
+    bgpNetworks: '10.10.10.0 255.255.255.0',
+    enableNatOverload: false,
+    natInsideIf: 'Gi0/1',
+    natOutsideIf: 'Gi0/0',
+    natAclSubnet: '10.10.0.0 0.0.255.255',
+    enableRestconf: false,
+  });
+  assert.equal(ciscoAdv.includes('ip dhcp snooping'), true);
+  assert.equal(ciscoAdv.includes('ip arp inspection vlan'), true);
+  assert.equal(ciscoAdv.includes('spanning-tree portfast bpduguard default'), true);
+  assert.equal(ciscoAdv.includes('router bgp 65010'), true);
+  assert.equal(ciscoAdv.includes('neighbor 172.16.0.1 remote-as 65001'), true);
+
+  const lacp = generateCiscoMikrotikLacpSync({
+    osVersion: 'v7',
+    ciscoPortChannelId: 2,
+    ciscoPorts: 'Gi0/23-24',
+    ciscoTrunkNativeVlan: 10,
+    mikrotikBondName: 'bond-Cisco',
+    mikrotikSlaves: 'ether9,ether10',
+    mikrotikBridge: 'bridge-LAN',
+    vlans: [
+      { id: 10, name: 'MGMT' },
+      { id: 20, name: 'USERS' },
+    ],
+  });
+  assert.equal(lacp.ciscoCli.includes('channel-group 2 mode active'), true);
+  assert.equal(lacp.mikrotikCli.includes('mode=802.3ad'), true);
+  assert.equal(lacp.mikrotikCli.includes('vlan-id=20'), true);
+
+  const fqCodel = generateCarrierCakeFqCodelScript({
+    osVersion: 'v7',
+    wanInterface: 'ether1',
+    lanInterface: 'bridge-LAN',
+    downMbps: 300,
+    upMbps: 50,
+    queueKind: 'fq_codel',
+  });
+  assert.equal(fqCodel.includes('kind=fq-codel'), true);
+
+  const vrrp = generateVrrpFailoverScript({
+    osVersion: 'v7',
+    role: 'master',
+    interfaceName: 'bridge-LAN',
+    vrid: 55,
+    virtualIp: '192.168.88.1/32',
+    interfaceIp: '192.168.88.2/24',
+    priority: 200,
+    preemptMode: true,
+  });
+  assert.equal(vrrp.includes('/interface vrrp add name="vrrp-HA-55"'), true);
+  assert.equal(vrrp.includes('vrid=55 priority=200'), true);
+});
+

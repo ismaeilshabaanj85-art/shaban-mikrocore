@@ -2,11 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FIREBASE_RTDB_URL,
+  cloudFetchRouterInventory,
   cloudFetchRouterTelemetry,
+  cloudFetchSystemBroadcast,
+  cloudPublishSystemBroadcast,
+  cloudRequestInventorySync,
   cloudSendAndAwaitRouterCommand,
+  detectIpConflicts,
+  evaluateRouterAlerts,
   fromCloudTenantRecord,
   getRouterCloudBase,
   isTelemetryFresh,
+  parseRouterOsPingMs,
+  parseTelemetryNumber,
   toCloudTenantRecord,
   validateTenantLoginState,
 } from './firebaseCloud';
@@ -157,6 +165,160 @@ test('cloudFetchRouterTelemetry and cloudSendAndAwaitRouterCommand interact with
     assert.equal(cmdRes.executed, true);
     assert.equal(commandPollCount, 1);
     assert.equal(calls.some((c) => c.method === 'PUT' && c.url.endsWith('/command.json')), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('parseTelemetryNumber, parseRouterOsPingMs, detectIpConflicts, and evaluateRouterAlerts handle edge cases accurately', () => {
+  assert.equal(parseTelemetryNumber(null), null);
+  assert.equal(parseTelemetryNumber('null'), null);
+  assert.equal(parseTelemetryNumber('none'), null);
+  assert.equal(parseTelemetryNumber(42), 42);
+  assert.equal(parseTelemetryNumber('42C'), 42);
+  assert.equal(parseTelemetryNumber('24.2V'), 24.2);
+
+  assert.equal(parseRouterOsPingMs(null), null);
+  assert.equal(parseRouterOsPingMs('timeout'), null);
+  assert.equal(parseRouterOsPingMs(24), 24);
+  assert.equal(parseRouterOsPingMs('24ms'), 24);
+  assert.equal(parseRouterOsPingMs('00:00:00.024'), 24);
+  assert.equal(parseRouterOsPingMs('450us'), 1);
+
+  const conflicts = detectIpConflicts([
+    { address: '192.168.88.10', mac: 'AA:BB:CC:00:00:01', hostName: 'PC1', status: 'bound' },
+    { address: '192.168.88.10', mac: 'AA:BB:CC:00:00:02', hostName: 'Intruder', status: 'arp' },
+    { address: '192.168.88.11', mac: 'AA:BB:CC:00:00:03', hostName: 'Phone', status: 'bound' },
+    { address: '192.168.88.11', mac: 'aa:bb:cc:00:00:03', hostName: 'Phone', status: 'arp' },
+  ]);
+  assert.deepEqual(conflicts, ['192.168.88.10']);
+
+  const offlineAlerts = evaluateRouterAlerts({
+    telemetry: null,
+    routerName: 'Tower-A',
+    isConnected: false,
+    wasConnected: true,
+    nowMs: 1000,
+  });
+  assert.equal(offlineAlerts.some((a) => a.id === 'router_offline'), true);
+
+  const criticalAlerts = evaluateRouterAlerts({
+    telemetry: {
+      board: 'RB5009',
+      version: '7.16',
+      cpu: 91,
+      freeMem: 512000,
+      totalMem: 1024000,
+      uptime: '1d',
+      temp: 71,
+      volt: 24,
+      rxBps: 50_000_000,
+      txBps: 10_000_000,
+      pingMs: 185,
+      interfaces: [{ name: 'ether1-WAN', running: false }],
+      hotspot: 10,
+      ppp: 5,
+      active_sessions: [],
+      timestamp: 1000,
+    },
+    routerName: 'Tower-A',
+    isConnected: true,
+    wasConnected: true,
+    nowMs: 1000,
+  });
+  assert.equal(criticalAlerts.some((a) => a.id === 'high_latency'), true);
+  assert.equal(criticalAlerts.some((a) => a.id === 'wan_down_ether1-WAN'), true);
+  assert.equal(criticalAlerts.some((a) => a.id === 'high_cpu'), true);
+  assert.equal(criticalAlerts.some((a) => a.id === 'high_temp'), true);
+
+  const timeoutAlerts = evaluateRouterAlerts({
+    telemetry: {
+      board: 'hEX',
+      version: '6.49',
+      cpu: 15,
+      freeMem: 100,
+      totalMem: 256,
+      uptime: '2h',
+      temp: null,
+      volt: 21.8,
+      rxBps: 1000,
+      txBps: 500,
+      pingMs: null,
+      interfaces: [{ name: 'ether1-WAN', running: true }],
+      hotspot: 0,
+      ppp: 0,
+      active_sessions: [],
+      timestamp: 1000,
+    },
+    routerName: 'Tower-B',
+    isConnected: true,
+    wasConnected: true,
+    lowVoltageThreshold: 22.5,
+    nowMs: 1000,
+  });
+  assert.equal(timeoutAlerts.some((a) => a.id === 'wan_packet_loss'), true);
+  assert.equal(timeoutAlerts.some((a) => a.id === 'low_battery_voltage'), true);
+});
+
+test('cloudFetchRouterInventory, cloudRequestInventorySync, and system broadcast endpoints work via mocked fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  let storedBroadcast: Record<string, unknown> | null = null;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method || 'GET';
+
+    if (url.endsWith('/command.json') && method === 'PUT') {
+      return new Response(init?.body || '""', { status: 200 });
+    }
+    if (url.endsWith('/command.json') && method === 'GET') {
+      return new Response('null', { status: 200 });
+    }
+    if (url.endsWith('/inventory.json') && method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          injected_accounts: [{ name: 'MC-101', type: 'hotspot', profile: '8M-Plus', disabled: false }],
+          dishes: [{ identity: 'Dish-North', address: '10.10.1.5', mac: 'AA:11:22:33:44:55', interface: 'ether2', platform: 'MikroTik' }],
+          ip_table: [{ address: '192.168.88.20', mac: '11:22:33:44:55:66', hostName: 'Client', status: 'bound' }],
+          logs: [{ time: '10:00:00', topics: 'hotspot,info', message: 'MC-101 logged in' }],
+          timestamp: 1_700_000_000_000,
+        }),
+        { status: 200 }
+      );
+    }
+    if (url.endsWith('/system_broadcast.json') && method === 'PUT') {
+      storedBroadcast = JSON.parse(String(init?.body || '{}'));
+      return new Response(JSON.stringify(storedBroadcast), { status: 200 });
+    }
+    if (url.endsWith('/system_broadcast.json') && method === 'GET') {
+      return new Response(JSON.stringify(storedBroadcast), { status: 200 });
+    }
+    return new Response('null', { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const invOnly = await cloudFetchRouterInventory('tenant-x', 'r1');
+    assert.equal(invOnly.ok, true);
+    assert.equal(invOnly.inventory?.injected_accounts.length, 1);
+    assert.equal(invOnly.inventory?.dishes[0].identity, 'Dish-North');
+
+    let queued = false;
+    const syncRes = await cloudRequestInventorySync('tenant-x', 'r1', () => {
+      queued = true;
+    });
+    assert.equal(queued, true);
+    assert.equal(syncRes.ok, true);
+    assert.equal(syncRes.executed, true);
+    assert.equal(syncRes.inventory?.logs[0].message, 'MC-101 logged in');
+
+    const pubRes = await cloudPublishSystemBroadcast('تحديث v2.5', 'تمت إضافة مراقبة الصحون');
+    assert.equal(pubRes.ok, true);
+    assert.ok(pubRes.broadcast?.id);
+
+    const fetched = await cloudFetchSystemBroadcast();
+    assert.equal(fetched.ok, true);
+    assert.equal(fetched.broadcast?.title, 'تحديث v2.5');
+    assert.equal(fetched.broadcast?.message, 'تمت إضافة مراقبة الصحون');
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -33,6 +33,8 @@ interface RadiusVouchersModuleProps {
   mode: AppMode;
   activeRouter: RouterProfile;
   tenantUuid?: string;
+  portalNetworkName?: string;
+  portalSupportPhone?: string;
   customProfiles: SpeedProfile[];
   onSaveCustomProfiles: (profiles: SpeedProfile[]) => void;
   vouchers: GeneratedVoucher[];
@@ -45,6 +47,8 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
   mode,
   activeRouter,
   tenantUuid,
+  portalNetworkName,
+  portalSupportPhone,
   customProfiles,
   onSaveCustomProfiles,
   vouchers,
@@ -448,8 +452,20 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
                             ? 'جارٍ الإرسال...'
                             : 'Pushing...'
                           : lang === 'ar'
-                          ? 'إرسال وتنفيذ مباشر على الراوتر 🚀'
-                          : 'Push & Execute on Router 🚀'}
+                          ? 'إرسال للسيرفر مباشرة 🚀'
+                          : 'Push Directly to Server 🚀'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTab('print')}
+                      className="flex items-center gap-1.5 rounded-xl border border-cyan-400/45 bg-cyan-500/15 px-3 py-1.5 text-xs font-bold text-cyan-200 hover:bg-cyan-500/25 cursor-pointer"
+                    >
+                      <Printer className="h-3.5 w-3.5" />
+                      <span>
+                        {lang === 'ar'
+                          ? 'طباعة صفحة A4 احترافية (PDF) 🖨️'
+                          : 'Pro A4 Print Studio (PDF) 🖨️'}
                       </span>
                     </button>
                     <button
@@ -737,6 +753,8 @@ export const RadiusVouchersModule: React.FC<RadiusVouchersModuleProps> = ({
           lang={lang}
           vouchers={vouchers}
           hotspotDns="login.mikrocore.net"
+          defaultNetworkName={portalNetworkName}
+          defaultSupportPhone={portalSupportPhone}
         />
       )}
     </div>

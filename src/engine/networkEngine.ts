@@ -2,6 +2,7 @@ import {
   CiscoConfig,
   GeneratedVoucher,
   PccConfig,
+  PppoeSubscriber,
   RouterOSVersion,
   RouterProfile,
   SecurityShieldConfig,
@@ -162,8 +163,9 @@ function escapeRouterOsDoubleQuoted(script: string): string {
 }
 
 /**
- * Generates a universal Router-to-Firebase Cloud Agent connector script (RouterOS v6 & v7)
- * that works behind CGNAT / Starlink / without Public IP or port forwarding.
+ * Generates an Enterprise Router-to-Firebase Cloud Agent script (RouterOS v6 & v7)
+ * with 8-second fast telemetry (health, traffic, ping, interfaces, active sessions)
+ * and on-demand SYNC_INVENTORY collection (injected accounts, dishes, ip_table, logs).
  */
 export function generateOneLineConnector(params: {
   osVersion: RouterOSVersion;
@@ -178,24 +180,48 @@ export function generateOneLineConnector(params: {
   const safeRouterId = sanitizeCliToken(params.routerId || 'router_sandbox_1', 'router_sandbox_1');
   const baseUrl = `https://shaban-mikrocore-default-rtdb.firebaseio.com/routers/${safeTenant}/${safeRouterId}`;
   const telemetryUrl = `${baseUrl}/telemetry.json`;
+  const inventoryUrl = `${baseUrl}/inventory.json`;
   const commandUrl = `${baseUrl}/command.json`;
 
   const agentBody = [
-    ':local bn [/system resource get board-name]',
-    ':local ver [/system resource get version]',
+    ':local esc do={ :local s [:tostr $1]; :local out ""; :for idx from=0 to=([:len $s] - 1) do={ :local ch [:pick $s $idx ($idx + 1)]; :if ($ch = "\\"" || $ch = "\\\\" || $ch = "\\n" || $ch = "\\r") do={ :set out ($out . " ") } else={ :set out ($out . $ch) } }; :return $out }',
+    ':local bn [$esc [/system resource get board-name]]',
+    ':local ver [$esc [/system resource get version]]',
     ':local cpu [/system resource get cpu-load]',
     ':local fm [/system resource get free-memory]',
     ':local tm [/system resource get total-memory]',
-    ':local up [/system resource get uptime]',
+    ':local up [$esc [/system resource get uptime]]',
+    ':local tmp "null"',
+    ':local vlt "null"',
+    ':do { :local tv [/system health get [find name~"temp"] value]; :if ([:len $tv] > 0) do={ :set tmp ("\\"" . [$esc $tv] . "\\"") } } on-error={}',
+    ':if ($tmp = "null") do={ :do { :local tv [/system health get temperature]; :if ([:len $tv] > 0) do={ :set tmp ("\\"" . [$esc $tv] . "\\"") } } on-error={} }',
+    ':do { :local vv [/system health get [find name="voltage"] value]; :if ([:len $vv] > 0) do={ :set vlt ("\\"" . [$esc $vv] . "\\"") } } on-error={}',
+    ':if ($vlt = "null") do={ :do { :local vv [/system health get voltage]; :if ([:len $vv] > 0) do={ :set vlt ("\\"" . [$esc $vv] . "\\"") } } on-error={} }',
+    ':local rx 0',
+    ':local tx 0',
+    ':do { :local mt [/interface monitor-traffic [find running=yes disabled=no] once as-value]; :local r ($mt->"rx-bits-per-second"); :local t ($mt->"tx-bits-per-second"); :if ([:typeof $r] = "num") do={ :set rx $r }; :if ([:typeof $t] = "num") do={ :set tx $t } } on-error={}',
+    ':local pms "null"',
+    ':do { :local pr [/tool ping 1.1.1.1 count=1 as-value]; :local pt ($pr->"time"); :if ([:len $pt] > 0) do={ :set pms ("\\"" . [$esc $pt] . "\\"") } } on-error={}',
+    ':local ifJson "["',
+    ':local ifCnt 0',
+    ':do { :foreach i in=[/interface find disabled=no] do={ :if ($ifCnt < 16) do={ :local iname [$esc [/interface get $i name]]; :local irun [/interface get $i running]; :local rStr "false"; :if ($irun) do={ :set rStr "true" }; :if ($ifCnt > 0) do={ :set ifJson ($ifJson . ",") }; :set ifJson ($ifJson . "{\\"name\\":\\"" . $iname . "\\",\\"running\\":" . $rStr . "}"); :set ifCnt ($ifCnt + 1) } } } on-error={}',
+    ':set ifJson ($ifJson . "]")',
     ':local hs 0',
     ':do { :set hs [/ip hotspot active print count-only] } on-error={}',
     ':local pp 0',
     ':do { :set pp [/ppp active print count-only] } on-error={}',
-    ':local json ("{\\"board\\":\\"" . $bn . "\\",\\"version\\":\\"" . $ver . "\\",\\"cpu\\":" . $cpu . ",\\"freeMem\\":" . $fm . ",\\"totalMem\\":" . $tm . ",\\"uptime\\":\\"" . $up . "\\",\\"hotspot\\":" . $hs . ",\\"ppp\\":" . $pp . ",\\"timestamp\\":{\\".sv\\":\\"timestamp\\"}}")',
+    ':local sesJson "["',
+    ':local sesCnt 0',
+    ':do { :foreach h in=[/ip hotspot active find] do={ :if ($sesCnt < 30) do={ :local u [$esc [/ip hotspot active get $h user]]; :local ip [$esc [/ip hotspot active get $h address]]; :local mc [$esc [/ip hotspot active get $h mac-address]]; :local su [$esc [/ip hotspot active get $h uptime]]; :if ($sesCnt > 0) do={ :set sesJson ($sesJson . ",") }; :set sesJson ($sesJson . "{\\"user\\":\\"" . $u . "\\",\\"type\\":\\"hotspot\\",\\"address\\":\\"" . $ip . "\\",\\"mac\\":\\"" . $mc . "\\",\\"uptime\\":\\"" . $su . "\\"}"); :set sesCnt ($sesCnt + 1) } } } on-error={}',
+    ':do { :foreach p in=[/ppp active find] do={ :if ($sesCnt < 30) do={ :local u [$esc [/ppp active get $p name]]; :local ip [$esc [/ppp active get $p address]]; :local mc [$esc [/ppp active get $p caller-id]]; :local su [$esc [/ppp active get $p uptime]]; :if ($sesCnt > 0) do={ :set sesJson ($sesJson . ",") }; :set sesJson ($sesJson . "{\\"user\\":\\"" . $u . "\\",\\"type\\":\\"pppoe\\",\\"address\\":\\"" . $ip . "\\",\\"mac\\":\\"" . $mc . "\\",\\"uptime\\":\\"" . $su . "\\"}"); :set sesCnt ($sesCnt + 1) } } } on-error={}',
+    ':set sesJson ($sesJson . "]")',
+    ':local json ("{\\"board\\":\\"" . $bn . "\\",\\"version\\":\\"" . $ver . "\\",\\"cpu\\":" . $cpu . ",\\"freeMem\\":" . $fm . ",\\"totalMem\\":" . $tm . ",\\"uptime\\":\\"" . $up . "\\",\\"temp\\":" . $tmp . ",\\"volt\\":" . $vlt . ",\\"rxBps\\":" . $rx . ",\\"txBps\\":" . $tx . ",\\"pingMs\\":" . $pms . ",\\"interfaces\\":" . $ifJson . ",\\"hotspot\\":" . $hs . ",\\"ppp\\":" . $pp . ",\\"active_sessions\\":" . $sesJson . ",\\"timestamp\\":{\\".sv\\":\\"timestamp\\"}}")',
     `:do { /tool fetch mode=https url="${telemetryUrl}" http-method=put http-header-field="Content-Type: application/json" http-data=$json output=none } on-error={}`,
     ':local cmd ""',
     `:do { :local res [/tool fetch mode=https url="${commandUrl}" as-value output=user]; :set cmd ($res->"data") } on-error={}`,
-    ':if ([:len $cmd] > 0 && $cmd != "null" && $cmd != "\\"null\\"" && $cmd != "\\"\\"") do={ :if ([:pick $cmd 0 1] = "\\"") do={ :set cmd [:pick $cmd 1 ([:len $cmd] - 1)] }; :local clean ""; :local i 0; :local n [:len $cmd]; :while ($i < $n) do={ :local c [:pick $cmd $i ($i + 1)]; :if ($c = "\\\\") do={ :local nx [:pick $cmd ($i + 1) ($i + 2)]; :if ($nx = "n") do={ :set clean ($clean . "\\n"); :set i ($i + 2) } else={ :if ($nx = "\\"" || $nx = "\\\\") do={ :set clean ($clean . $nx); :set i ($i + 2) } else={ :set clean ($clean . $c); :set i ($i + 1) } } } else={ :set clean ($clean . $c); :set i ($i + 1) } }; :do { :local runFn [:parse $clean]; $runFn } on-error={}; :do { /tool fetch mode=https url="' +
+    ':if ([:len $cmd] > 0 && $cmd != "null" && $cmd != "\\"null\\"" && $cmd != "\\"\\"") do={ :if ([:pick $cmd 0 1] = "\\"") do={ :set cmd [:pick $cmd 1 ([:len $cmd] - 1)] }; :local clean ""; :local i 0; :local n [:len $cmd]; :while ($i < $n) do={ :local c [:pick $cmd $i ($i + 1)]; :if ($c = "\\\\") do={ :local nx [:pick $cmd ($i + 1) ($i + 2)]; :if ($nx = "n") do={ :set clean ($clean . "\\n"); :set i ($i + 2) } else={ :if ($nx = "\\"" || $nx = "\\\\") do={ :set clean ($clean . $nx); :set i ($i + 2) } else={ :set clean ($clean . $c); :set i ($i + 1) } } } else={ :set clean ($clean . $c); :set i ($i + 1) } }; :if ($clean = "SYNC_INVENTORY") do={ :local accJ "["; :local ac 0; :do { :foreach u in=[/ip hotspot user find] do={ :if ($ac < 80) do={ :local nm [$esc [/ip hotspot user get $u name]]; :local pr [$esc [/ip hotspot user get $u profile]]; :local dis [/ip hotspot user get $u disabled]; :local ds "false"; :if ($dis) do={ :set ds "true" }; :if ($ac > 0) do={ :set accJ ($accJ . ",") }; :set accJ ($accJ . "{\\"name\\":\\"" . $nm . "\\",\\"type\\":\\"hotspot\\",\\"profile\\":\\"" . $pr . "\\",\\"disabled\\":" . $ds . "}"); :set ac ($ac + 1) } } } on-error={}; :do { :foreach p in=[/ppp secret find] do={ :if ($ac < 80) do={ :local nm [$esc [/ppp secret get $p name]]; :local pr [$esc [/ppp secret get $p profile]]; :local dis [/ppp secret get $p disabled]; :local ds "false"; :if ($dis) do={ :set ds "true" }; :if ($ac > 0) do={ :set accJ ($accJ . ",") }; :set accJ ($accJ . "{\\"name\\":\\"" . $nm . "\\",\\"type\\":\\"pppoe\\",\\"profile\\":\\"" . $pr . "\\",\\"disabled\\":" . $ds . "}"); :set ac ($ac + 1) } } } on-error={}; :set accJ ($accJ . "]"); :local dshJ "["; :local dc 0; :do { :foreach nb in=[/ip neighbor find] do={ :if ($dc < 40) do={ :local id [$esc [/ip neighbor get $nb identity]]; :local ad [$esc [/ip neighbor get $nb address]]; :local mc [$esc [/ip neighbor get $nb mac-address]]; :local inf [$esc [/ip neighbor get $nb interface]]; :local pl [$esc [/ip neighbor get $nb platform]]; :if ($dc > 0) do={ :set dshJ ($dshJ . ",") }; :set dshJ ($dshJ . "{\\"identity\\":\\"" . $id . "\\",\\"address\\":\\"" . $ad . "\\",\\"mac\\":\\"" . $mc . "\\",\\"interface\\":\\"" . $inf . "\\",\\"platform\\":\\"" . $pl . "\\"}"); :set dc ($dc + 1) } } } on-error={}; :if ($dc = 0) do={ :do { :foreach ar in=[/ip arp find] do={ :if ($dc < 25) do={ :local ad [$esc [/ip arp get $ar address]]; :local mc [$esc [/ip arp get $ar mac-address]]; :local inf [$esc [/ip arp get $ar interface]]; :if ($dc > 0) do={ :set dshJ ($dshJ . ",") }; :set dshJ ($dshJ . "{\\"identity\\":\\"ARP-Device\\",\\"address\\":\\"" . $ad . "\\",\\"mac\\":\\"" . $mc . "\\",\\"interface\\":\\"" . $inf . "\\",\\"platform\\":\\"MikroTik/AP\\"}"); :set dc ($dc + 1) } } } on-error={} }; :set dshJ ($dshJ . "]"); :local ipJ "["; :local ic 0; :do { :foreach dl in=[/ip dhcp-server lease find] do={ :if ($ic < 60) do={ :local ad [$esc [/ip dhcp-server lease get $dl address]]; :local mc [$esc [/ip dhcp-server lease get $dl mac-address]]; :local hn [$esc [/ip dhcp-server lease get $dl host-name]]; :local st [$esc [/ip dhcp-server lease get $dl status]]; :if ($ic > 0) do={ :set ipJ ($ipJ . ",") }; :set ipJ ($ipJ . "{\\"address\\":\\"" . $ad . "\\",\\"mac\\":\\"" . $mc . "\\",\\"hostName\\":\\"" . $hn . "\\",\\"status\\":\\"" . $st . "\\",\\"source\\":\\"dhcp\\"}"); :set ic ($ic + 1) } } } on-error={}; :do { :foreach ar in=[/ip arp find] do={ :if ($ic < 60) do={ :local ad [$esc [/ip arp get $ar address]]; :local mc [$esc [/ip arp get $ar mac-address]]; :local inf [$esc [/ip arp get $ar interface]]; :if ($ic > 0) do={ :set ipJ ($ipJ . ",") }; :set ipJ ($ipJ . "{\\"address\\":\\"" . $ad . "\\",\\"mac\\":\\"" . $mc . "\\",\\"hostName\\":\\"" . $inf . "\\",\\"status\\":\\"arp\\",\\"source\\":\\"arp\\"}"); :set ic ($ic + 1) } } } on-error={}; :set ipJ ($ipJ . "]"); :local logJ "["; :local lc 0; :do { :local allLogs [/log find]; :local totalLogs [:len $allLogs]; :local startIdx 0; :if ($totalLogs > 25) do={ :set startIdx ($totalLogs - 25) }; :for li from=$startIdx to=($totalLogs - 1) do={ :local lid [:pick $allLogs $li]; :local lt [$esc [/log get $lid time]]; :local ltp [$esc [/log get $lid topics]]; :local lm [$esc [/log get $lid message]]; :if ($lc > 0) do={ :set logJ ($logJ . ",") }; :set logJ ($logJ . "{\\"time\\":\\"" . $lt . "\\",\\"topics\\":\\"" . $ltp . "\\",\\"message\\":\\"" . $lm . "\\"}"); :set lc ($lc + 1) } } on-error={}; :set logJ ($logJ . "]"); :local invJson ("{\\"injected_accounts\\":" . $accJ . ",\\"dishes\\":" . $dshJ . ",\\"ip_table\\":" . $ipJ . ",\\"logs\\":" . $logJ . ",\\"timestamp\\":{\\".sv\\":\\"timestamp\\"}}"); :do { /tool fetch mode=https url="' +
+      inventoryUrl +
+      '" http-method=put http-header-field="Content-Type: application/json" http-data=$invJson output=none } on-error={} } else={ :do { :local runFn [:parse $clean]; $runFn } on-error={} }; :do { /tool fetch mode=https url="' +
       commandUrl +
       '" http-method=delete output=none } on-error={} }',
   ].join('; ');
@@ -206,9 +232,78 @@ export function generateOneLineConnector(params: {
     ':do { /system scheduler remove [find name="MikroCore_CloudAgent"] } on-error={}',
     ':do { /system script remove [find name="MikroCore_CloudAgent"] } on-error={}',
     `/system script add name="MikroCore_CloudAgent" policy=read,write,policy,test,sensitive source="${escapedSource}"`,
-    '/system scheduler add name="MikroCore_CloudAgent" interval=15s start-time=startup policy=read,write,policy,test,sensitive on-event="/system script run MikroCore_CloudAgent"',
+    '/system scheduler add name="MikroCore_CloudAgent" interval=8s start-time=startup policy=read,write,policy,test,sensitive on-event="/system script run MikroCore_CloudAgent"',
     ':do { /system script run MikroCore_CloudAgent } on-error={}',
   ].join('; ');
+}
+
+export function buildKickSessionCommand(type: 'hotspot' | 'pppoe', user: string): string {
+  const safeUser = sanitizeCliToken(user, 'user');
+  return type === 'pppoe'
+    ? `/ppp active remove [find name="${safeUser}"]`
+    : `/ip hotspot active remove [find user="${safeUser}"]`;
+}
+
+export function buildBanMacCommand(mac: string, label?: string): string {
+  const safeMac = sanitizeCliToken(mac, '').toUpperCase();
+  const safeComment = sanitizeCliToken(label || safeMac || 'blocked', 'blocked');
+  return [
+    `:do { /ip hotspot ip-binding add mac-address="${safeMac}" type=blocked comment="MikroCore-Ban:${safeComment}" } on-error={}`,
+    `:do { /ip firewall filter add chain=forward src-mac-address="${safeMac}" action=drop comment="MikroCore-Ban:${safeComment}" place-before=0 } on-error={}`,
+    `:do { /ip hotspot active remove [find mac-address="${safeMac}"] } on-error={}`,
+    `:do { /ppp active remove [find caller-id="${safeMac}"] } on-error={}`,
+  ].join('; ');
+}
+
+export function buildSpeedLimitCommand(
+  type: 'hotspot' | 'pppoe',
+  user: string,
+  rateLimit: string,
+  address?: string
+): string {
+  const safeUser = sanitizeCliToken(user, 'user');
+  const safeRate = sanitizeCliToken(rateLimit, '2M/2M');
+  const safeIp = address ? sanitizeCliToken(address, '') : '';
+  if (safeIp) {
+    return [
+      `:do { /queue simple remove [find name="MC-Limit-${safeUser}"] } on-error={}`,
+      `/queue simple add name="MC-Limit-${safeUser}" target="${safeIp}/32" max-limit=${safeRate} comment="MikroCore Dynamic Speed Limit"`,
+    ].join('; ');
+  }
+  return type === 'pppoe'
+    ? `/ppp secret set [find name="${safeUser}"] rate-limit="${safeRate}"`
+    : `/ip hotspot user set [find name="${safeUser}"] rate-limit="${safeRate}"`;
+}
+
+export function buildToggleAccountCommand(
+  type: 'hotspot' | 'pppoe',
+  name: string,
+  disable: boolean
+): string {
+  const safeName = sanitizeCliToken(name, 'user');
+  const flag = disable ? 'yes' : 'no';
+  return type === 'pppoe'
+    ? `/ppp secret set [find name="${safeName}"] disabled=${flag}`
+    : `/ip hotspot user set [find name="${safeName}"] disabled=${flag}`;
+}
+
+export function buildDeleteAccountCommand(type: 'hotspot' | 'pppoe', name: string): string {
+  const safeName = sanitizeCliToken(name, 'user');
+  return type === 'pppoe'
+    ? `/ppp secret remove [find name="${safeName}"]; /ppp active remove [find name="${safeName}"]`
+    : `/ip hotspot user remove [find name="${safeName}"]; /ip hotspot active remove [find user="${safeName}"]`;
+}
+
+export function buildCleanExpiredAccountsCommand(): string {
+  return [
+    ':do { /ip hotspot user remove [find comment~"EXPIRED" || disabled=yes] } on-error={}',
+    ':do { /ppp secret remove [find comment~"EXPIRED" || disabled=yes] } on-error={}',
+  ].join('; ');
+}
+
+export function buildPingDishCommand(address: string): string {
+  const safeAddr = sanitizeCliToken(address, '192.168.88.1');
+  return `/tool ping address=${safeAddr} count=4`;
 }
 
 export const MIKROCORE_BRIDGE_URL = 'https://mikrocore-bridge.ismaeilshabaanj85.workers.dev';
@@ -888,9 +983,34 @@ export function generateCiscoIosCli(config: CiscoConfig): string {
         ...(config.deviceType === 'switch_l3' ? [` switchport trunk encapsulation dot1q`] : []),
         ` switchport mode trunk`,
         ` switchport trunk native vlan ${Math.max(1, Math.min(4094, config.nativeVlanId))}`,
+        ...(config.enableDhcpSnooping ? [` ip dhcp snooping trust`] : []),
+        ...(config.enableDai ? [` ip arp inspection trust`] : []),
         ` exit`,
         `!`
       );
+    }
+
+    // Layer-2 Enterprise Security Hardening (DHCP Snooping, DAI, BPDU Guard)
+    if (config.enableDhcpSnooping || config.enableDai || config.enableBpduGuard) {
+      const vlanIds = config.vlans.map((v) => Math.max(1, Math.min(4094, Math.floor(v.id)))).join(',') || '10,20';
+      lines.push(`! --- Layer-2 Security Hardening ---`);
+      if (config.enableDhcpSnooping) {
+        lines.push(
+          `ip dhcp snooping`,
+          `ip dhcp snooping vlan ${vlanIds}`,
+          `no ip dhcp snooping information option`
+        );
+      }
+      if (config.enableDai) {
+        lines.push(
+          `ip arp inspection vlan ${vlanIds}`,
+          `ip arp inspection validate src-mac dst-mac ip`
+        );
+      }
+      if (config.enableBpduGuard) {
+        lines.push(`spanning-tree portfast bpduguard default`);
+      }
+      lines.push(`!`);
     }
   }
 
@@ -915,6 +1035,25 @@ export function generateCiscoIosCli(config: CiscoConfig): string {
           .map((n) => n.trim())
           .filter(Boolean)
           .map((net) => ` network ${net}`),
+        ` exit`,
+        `!`
+      );
+    } else if (config.routingMode === 'bgp') {
+      const asn = Math.max(1, Math.min(4294967295, Number(config.bgpAsn) || 65010));
+      const remoteAsn = Math.max(1, Math.min(4294967295, Number(config.bgpRemoteAsn) || 65001));
+      const bgpRid = sanitizeCliToken(config.bgpRouterId || config.ospfRouterId || '10.10.10.1', '10.10.10.1');
+      const peerIp = sanitizeCliToken(config.bgpNeighborIp || '172.16.0.1', '172.16.0.1');
+      const bgpNets = (config.bgpNetworks || '10.10.10.0 mask 255.255.255.0')
+        .split('\n')
+        .map((n) => n.trim())
+        .filter(Boolean);
+      lines.push(
+        `! --- BGP Border Routing ---`,
+        `router bgp ${asn}`,
+        ` bgp router-id ${bgpRid}`,
+        ` bgp log-neighbor-changes`,
+        ` neighbor ${peerIp} remote-as ${remoteAsn}`,
+        ...bgpNets.map((net) => ` network ${net}`),
         ` exit`,
         `!`
       );
@@ -1058,5 +1197,250 @@ export function generateSafeFamilyRollbackScript(osVersion: RouterOSVersion): st
   );
 
   return lines.join('\n');
+}
+
+// === Phase 2 Enterprise Generators ===
+
+export function buildWhatsAppBillingUrl(
+  sub: PppoeSubscriber,
+  networkName: string = 'شبكة مايكروكور'
+): string {
+  let digits = (sub.phone || '').replace(/[^\d]/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('09') && digits.length === 10) {
+    digits = `963${digits.slice(1)}`;
+  }
+  const msg = `مرحباً ${sub.clientName}،\nنود تذكيركم بقرب انتهاء/استحقاق اشتراك الإنترنت المنزلي من (${networkName}).\n• اسم الحساب: ${sub.pppoeUsername}\n• الباقة: ${sub.speedLabel}\n• تاريخ الانتهاء: ${sub.expiryDate}\n• قيمة الاشتراك الشهري: $${sub.monthlyFeeUsd}\nيرجى تجديد الاشتراك لضمان استمرار الخدمة دون انقطاع. شكراً لتواصلكم!`;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
+}
+
+export function buildPppoeExpiryRedirectCommand(
+  pppoeUsername: string,
+  redirectTargetIp: string,
+  osVersion: RouterOSVersion
+): string {
+  const safeUser = sanitizeCliToken(pppoeUsername, 'ppp_user');
+  const safeIp = sanitizeCliToken(redirectTargetIp, '192.168.88.1');
+  return [
+    `# Shaban MikroCore | PPPoE Expiry Notice Redirect (${osVersion.toUpperCase()})`,
+    `:do { /ppp profile add name="EXPIRED_BILLING" local-address=${safeIp} address-list="MikroCore_Expired_PPPoE" rate-limit="128k/128k" comment="MikroCore Billing Expired" } on-error={}`,
+    `/ppp secret set [find name="${safeUser}"] profile="EXPIRED_BILLING" comment="EXPIRED:${safeUser}"`,
+    `:do { /ip firewall nat add chain=dstnat src-address-list="MikroCore_Expired_PPPoE" protocol=tcp dst-port=80 action=dst-nat to-addresses=${safeIp} to-ports=8080 comment="MikroCore-PPPoE-Expired-Redirect" } on-error={}`,
+    `:do { /ppp active remove [find name="${safeUser}"] } on-error={}`,
+  ].join('\n');
+}
+
+export function generateBatteryGuardScript(params: {
+  osVersion: RouterOSVersion;
+  thresholdV: number;
+  secondaryPorts: string;
+  botToken?: string;
+  chatId?: string;
+  routerName: string;
+}): string {
+  const thresholdTenths = Math.max(80, Math.min(600, Math.round((Number(params.thresholdV) || 22.5) * 10)));
+  const token = sanitizeCliToken(params.botToken || '', 'YOUR_BOT_TOKEN');
+  const chatId = sanitizeCliToken(params.chatId || '', 'YOUR_CHAT_ID');
+  const rName = sanitizeCliToken(params.routerName || 'MikroTik', 'MikroTik');
+  const ports = (params.secondaryPorts || '')
+    .split(',')
+    .map((p) => sanitizeCliToken(p.trim(), ''))
+    .filter(Boolean);
+
+  const shutCmds = ports
+    .map((p) => `:do { /interface set [find name="${p}"] disabled=yes } on-error={}`)
+    .join('; ');
+
+  const voltRead =
+    params.osVersion === 'v7'
+      ? `:local vv [/system health get [find name="voltage"] value]`
+      : `:local vv [/system health get voltage]`;
+
+  const body = [
+    `:local vv ""`,
+    `:do { ${voltRead} } on-error={}`,
+    `:if ([:len $vv] > 0) do={`,
+    `  :local s [:tostr $vv]`,
+    `  :local dot [:find $s "."]`,
+    `  :local tenths 0`,
+    `  :if ([:typeof $dot] = "num") do={ :set tenths (([:tonum [:pick $s 0 $dot]] * 10) + [:tonum [:pick $s ($dot + 1) ($dot + 2)]]) } else={ :set tenths ([:tonum $s] * 10) }`,
+    `  :if ($tenths > 0 && $tenths < ${thresholdTenths}) do={`,
+    `    :log warning ("MikroCore BatteryGuard LOW VOLTAGE: " . $s . "V on ${rName}")`,
+    ...(shutCmds ? [`    ${shutCmds}`] : []),
+    `    :do { /tool fetch url="https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=LOW_BATTERY_ALERT:+${rName}+Voltage+" . $s . "V" keep-result=no } on-error={}`,
+    `  }`,
+    `}`,
+  ].join('\n');
+
+  const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/\n/g, '; ');
+  return [
+    `# Shaban MikroCore | Smart Low-Battery Voltage Guard (${params.osVersion.toUpperCase()})`,
+    `:do { /system scheduler remove [find name="MikroCore_BatteryGuard"] } on-error={}`,
+    `:do { /system script remove [find name="MikroCore_BatteryGuard"] } on-error={}`,
+    `/system script add name="MikroCore_BatteryGuard" policy=read,write,test,sensitive source="${escaped}"`,
+    `/system scheduler add name="MikroCore_BatteryGuard" interval=1m start-time=startup on-event="/system script run MikroCore_BatteryGuard"`,
+  ].join('\n');
+}
+
+export function buildGamingLatencyMatrixCommand(): string {
+  return [
+    ':put "=== Cloudflare 1.1.1.1 ==="; /tool ping 1.1.1.1 count=3',
+    ':put "=== Google 8.8.8.8 ==="; /tool ping 8.8.8.8 count=3',
+    ':put "=== PUBG/AWS EU ==="; /tool ping 3.120.0.1 count=3',
+    ':put "=== Discord/CF Relay ==="; /tool ping 162.159.135.232 count=3',
+  ].join('; ');
+}
+
+export function generateCiscoMikrotikLacpSync(params: {
+  osVersion: RouterOSVersion;
+  ciscoPortChannelId: number;
+  ciscoPorts: string;
+  ciscoTrunkNativeVlan: number;
+  mikrotikBondName: string;
+  mikrotikSlaves: string;
+  mikrotikBridge: string;
+  vlans: Array<{ id: number; name: string; subnetCidr?: string }>;
+}): { ciscoCli: string; mikrotikCli: string } {
+  const poId = Math.max(1, Math.min(48, Math.floor(params.ciscoPortChannelId || 1)));
+  const ciscoPorts = sanitizeCliToken(params.ciscoPorts, 'GigabitEthernet0/23-24');
+  const nativeVlan = Math.max(1, Math.min(4094, Math.floor(params.ciscoTrunkNativeVlan || 1)));
+  const bondName = sanitizeCliToken(params.mikrotikBondName, 'bond-CiscoTrunk');
+  const bridge = sanitizeCliToken(params.mikrotikBridge, 'bridge-LAN');
+  const slaves = params.mikrotikSlaves
+    .split(',')
+    .map((s) => sanitizeCliToken(s.trim(), ''))
+    .filter(Boolean);
+  const slaveList = slaves.length > 0 ? slaves.join(',') : 'sfp-sfpplus1,sfp-sfpplus2';
+
+  const cleanVlans = params.vlans.map((v) => ({
+    id: Math.max(2, Math.min(4094, Math.floor(v.id))),
+    name: sanitizeCliToken(v.name, `VLAN_${v.id}`),
+    subnetCidr: v.subnetCidr?.trim(),
+  }));
+  const vlanCsv = cleanVlans.map((v) => v.id).join(',') || '10,20';
+
+  const ciscoLines: string[] = [
+    `! === Cisco IOS Side | LACP Port-Channel${poId} & 802.1Q Trunk ===`,
+    `configure terminal`,
+    ...cleanVlans.flatMap((v) => [`vlan ${v.id}`, ` name ${v.name}`, ` exit`]),
+    `interface range ${ciscoPorts}`,
+    ` description Uplink_to_MikroTik_${bondName}`,
+    ` switchport trunk encapsulation dot1q`,
+    ` switchport mode trunk`,
+    ` switchport trunk native vlan ${nativeVlan}`,
+    ` switchport trunk allowed vlan ${vlanCsv}`,
+    ` channel-group ${poId} mode active`,
+    ` no shutdown`,
+    ` exit`,
+    `interface Port-channel${poId}`,
+    ` switchport mode trunk`,
+    ` switchport trunk allowed vlan ${vlanCsv}`,
+    ` no shutdown`,
+    `end`,
+    `write memory`,
+  ];
+
+  const mkLines: string[] = [
+    `# === MikroTik Side (${params.osVersion.toUpperCase()}) | 802.3ad LACP Bonding + Bridge VLAN ===`,
+    `/interface bonding add name="${bondName}" slaves=${slaveList} mode=802.3ad lacp-rate=1sec transmit-hash-policy=layer-2-and-3 comment="LACP Sync to Cisco Port-Channel${poId}"`,
+    `:do { /interface bridge add name="${bridge}" vlan-filtering=no } on-error={}`,
+    `/interface bridge port add bridge="${bridge}" interface="${bondName}"`,
+  ];
+
+  for (const v of cleanVlans) {
+    mkLines.push(
+      `/interface vlan add name="vlan-${v.id}-${v.name}" vlan-id=${v.id} interface="${bridge}"`,
+      `/interface bridge vlan add bridge="${bridge}" tagged="${bridge},${bondName}" vlan-ids=${v.id}`
+    );
+    if (v.subnetCidr) {
+      mkLines.push(
+        `/ip address add address=${sanitizeCliToken(v.subnetCidr, `10.10.${v.id}.1/24`)} interface="vlan-${v.id}-${v.name}"`
+      );
+    }
+  }
+  mkLines.push(`/interface bridge set "${bridge}" vlan-filtering=yes`);
+
+  return {
+    ciscoCli: ciscoLines.join('\n'),
+    mikrotikCli: mkLines.join('\n'),
+  };
+}
+
+export function generateCarrierCakeFqCodelScript(params: {
+  osVersion: RouterOSVersion;
+  wanInterface: string;
+  lanInterface: string;
+  downMbps: number;
+  upMbps: number;
+  queueKind: 'cake' | 'fq_codel';
+}): string {
+  const wanIf = sanitizeCliToken(params.wanInterface, 'ether1');
+  const lanIf = sanitizeCliToken(params.lanInterface, 'bridge-LAN');
+  const down = Math.max(5, Math.floor(params.downMbps || 200));
+  const up = Math.max(2, Math.floor(params.upMbps || 50));
+
+  if (params.osVersion === 'v6') {
+    return [
+      `# Shaban MikroCore | Carrier-Grade QoS Fallback (RouterOS v6 SFQ/PCQ)`,
+      `# Note: CAKE & FQ-Codel require RouterOS v7; generating v6 SFQ Low-Latency Tree`,
+      `/queue type add name=carrier-sfq kind=sfq sfq-perturb=5 sfq-allot=1514`,
+      `/queue tree add name=Carrier-Down parent="${lanIf}" max-limit=${down}M queue=carrier-sfq`,
+      `/queue tree add name=Carrier-Up parent="${wanIf}" max-limit=${up}M queue=carrier-sfq`,
+    ].join('\n');
+  }
+
+  if (params.queueKind === 'fq_codel') {
+    return [
+      `# Shaban MikroCore | Carrier-Grade FQ-Codel Anti-Bufferbloat QoS (RouterOS v7)`,
+      `:do { /ip firewall filter set [find action=fasttrack-connection] disabled=yes } on-error={}`,
+      `/queue type add name=fq-codel-down kind=fq-codel fq-codel-limit=10240 fq-codel-flows=1024 fq-codel-quantum=1514 fq-codel-ecn=yes`,
+      `/queue type add name=fq-codel-up kind=fq-codel fq-codel-limit=10240 fq-codel-flows=1024 fq-codel-quantum=1514 fq-codel-ecn=yes`,
+      `/queue tree add name=Carrier-FQCodel-Down parent="${lanIf}" max-limit=${down}M queue=fq-codel-down`,
+      `/queue tree add name=Carrier-FQCodel-Up parent="${wanIf}" max-limit=${up}M queue=fq-codel-up`,
+    ].join('\n');
+  }
+
+  return [
+    `# Shaban MikroCore | Carrier-Grade CAKE Anti-Bufferbloat QoS (RouterOS v7)`,
+    `:do { /ip firewall filter set [find action=fasttrack-connection] disabled=yes } on-error={}`,
+    `/queue type add name=carrier-cake-down kind=cake cake-bandwidth=${down}M cake-diffserv=diffserv4 cake-flowmode=dual-dsthost cake-nat=yes cake-ack-filter=filter`,
+    `/queue type add name=carrier-cake-up kind=cake cake-bandwidth=${up}M cake-diffserv=diffserv4 cake-flowmode=dual-srchost cake-nat=yes cake-ack-filter=filter`,
+    `/queue tree add name=Carrier-CAKE-Down parent="${lanIf}" max-limit=${down}M queue=carrier-cake-down`,
+    `/queue tree add name=Carrier-CAKE-Up parent="${wanIf}" max-limit=${up}M queue=carrier-cake-up`,
+  ].join('\n');
+}
+
+export function generateVrrpFailoverScript(params: {
+  osVersion: RouterOSVersion;
+  role: 'master' | 'backup';
+  interfaceName: string;
+  vrid: number;
+  virtualIp: string;
+  interfaceIp: string;
+  priority: number;
+  authPassword?: string;
+  preemptMode: boolean;
+}): string {
+  const iface = sanitizeCliToken(params.interfaceName, 'bridge-LAN');
+  const vrid = Math.max(1, Math.min(255, Math.floor(params.vrid || 50)));
+  const vip = sanitizeCliToken(params.virtualIp, '192.168.88.1/32');
+  const ifaceIp = sanitizeCliToken(params.interfaceIp, params.role === 'master' ? '192.168.88.2/24' : '192.168.88.3/24');
+  const prio = Math.max(1, Math.min(254, Math.floor(params.priority || (params.role === 'master' ? 200 : 100))));
+  const auth = params.authPassword?.trim() ? sanitizeCliToken(params.authPassword, '') : '';
+  const preempt = params.preemptMode ? 'yes' : 'no';
+  const vrrpName = `vrrp-HA-${vrid}`;
+
+  const authClause = auth ? ` authentication=ah password="${auth}"` : '';
+  const vrrpLine =
+    params.osVersion === 'v7'
+      ? `/interface vrrp add name="${vrrpName}" interface="${iface}" vrid=${vrid} priority=${prio} preemption-mode=${preempt} version=3${authClause} comment="MikroCore HA ${params.role.toUpperCase()}"`
+      : `/interface vrrp add name="${vrrpName}" interface="${iface}" vrid=${vrid} priority=${prio} preemption-mode=${preempt}${authClause} comment="MikroCore HA ${params.role.toUpperCase()}"`;
+
+  return [
+    `# Shaban MikroCore | VRRP High-Availability Failover (${params.role.toUpperCase()} · ${params.osVersion.toUpperCase()})`,
+    `/ip address add address=${ifaceIp} interface="${iface}" comment="VRRP Physical Node IP"`,
+    vrrpLine,
+    `/ip address add address=${vip} interface="${vrrpName}" comment="VRRP Virtual Gateway IP"`,
+  ].join('\n');
 }
 

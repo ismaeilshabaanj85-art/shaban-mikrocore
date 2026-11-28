@@ -199,7 +199,20 @@ export async function cloudDeleteTenant(
   }
 }
 
-// === Router-to-Firebase Cloud Agent Telemetry & Command Queue ===
+// === Router-to-Firebase Cloud Agent Telemetry, Inventory & Command Queue ===
+
+export interface RouterActiveSession {
+  user: string;
+  type: 'hotspot' | 'pppoe';
+  address: string;
+  mac: string;
+  uptime: string;
+}
+
+export interface RouterInterfaceStatus {
+  name: string;
+  running: boolean;
+}
 
 export interface RouterCloudTelemetry {
   board: string;
@@ -208,9 +221,219 @@ export interface RouterCloudTelemetry {
   freeMem: number;
   totalMem: number;
   uptime: string;
+  temp: number | null;
+  volt: number | null;
+  rxBps: number;
+  txBps: number;
+  pingMs: number | null;
+  interfaces: RouterInterfaceStatus[];
   hotspot: number;
   ppp: number;
+  active_sessions: RouterActiveSession[];
   timestamp: number;
+}
+
+export interface RouterInjectedAccount {
+  name: string;
+  type: 'hotspot' | 'pppoe';
+  profile: string;
+  disabled: boolean;
+}
+
+export interface RouterDishNeighbor {
+  identity: string;
+  address: string;
+  mac: string;
+  interface: string;
+  platform: string;
+}
+
+export interface RouterIpEntry {
+  address: string;
+  mac: string;
+  hostName: string;
+  status: string;
+  source?: string;
+}
+
+export interface RouterLogEntry {
+  time: string;
+  topics: string;
+  message: string;
+}
+
+export interface RouterCloudInventory {
+  injected_accounts: RouterInjectedAccount[];
+  dishes: RouterDishNeighbor[];
+  ip_table: RouterIpEntry[];
+  logs: RouterLogEntry[];
+  timestamp: number;
+}
+
+export function parseTelemetryNumber(val: unknown): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') return Number.isFinite(val) ? val : null;
+  const str = String(val).trim();
+  if (!str || str.toLowerCase() === 'null' || str.toLowerCase() === 'none') return null;
+  const match = str.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const num = Number(match[0]);
+  return Number.isFinite(num) ? num : null;
+}
+
+export function parseRouterOsPingMs(val: unknown): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') return Number.isFinite(val) && val >= 0 ? Math.round(val) : null;
+  const str = String(val).trim();
+  if (!str || str.toLowerCase() === 'null' || str.toLowerCase() === 'timeout') return null;
+  // Format like 00:00:00.024 or 00:00:01.250
+  const colonMatch = str.match(/(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (colonMatch) {
+    const hrs = Number(colonMatch[1]);
+    const mins = Number(colonMatch[2]);
+    const secs = Number(colonMatch[3]);
+    const totalMs = (hrs * 3600 + mins * 60 + secs) * 1000;
+    return Number.isFinite(totalMs) ? Math.max(1, Math.round(totalMs)) : null;
+  }
+  // Format like "24ms" or "24ms150us"
+  const msMatch = str.match(/(\d+(?:\.\d+)?)\s*ms/i);
+  if (msMatch) {
+    return Math.max(1, Math.round(Number(msMatch[1])));
+  }
+  // Format like "450us"
+  const usMatch = str.match(/(\d+(?:\.\d+)?)\s*us/i);
+  if (usMatch) {
+    return Math.max(1, Math.round(Number(usMatch[1]) / 1000));
+  }
+  const plain = Number(str);
+  return Number.isFinite(plain) && plain >= 0 ? Math.round(plain) : null;
+}
+
+export function detectIpConflicts(ipTable: RouterIpEntry[]): string[] {
+  const ipToMacs = new Map<string, Set<string>>();
+  for (const row of ipTable) {
+    const ip = (row.address || '').trim();
+    const mac = (row.mac || '').trim().toUpperCase();
+    if (!ip || !mac) continue;
+    if (!ipToMacs.has(ip)) ipToMacs.set(ip, new Set());
+    ipToMacs.get(ip)!.add(mac);
+  }
+  const conflicts: string[] = [];
+  for (const [ip, macs] of ipToMacs.entries()) {
+    if (macs.size > 1) conflicts.push(ip);
+  }
+  return conflicts;
+}
+
+export function evaluateRouterAlerts(params: {
+  telemetry: RouterCloudTelemetry | null;
+  routerName: string;
+  isConnected: boolean;
+  wasConnected: boolean;
+  lowVoltageThreshold?: number;
+  nowMs?: number;
+}): import('../types/mikrocore').NocAlertItem[] {
+  const {
+    telemetry,
+    routerName,
+    isConnected,
+    wasConnected,
+    lowVoltageThreshold = 22.5,
+    nowMs = Date.now(),
+  } = params;
+  const alerts: import('../types/mikrocore').NocAlertItem[] = [];
+
+  if (wasConnected && !isConnected) {
+    alerts.push({
+      id: 'router_offline',
+      severity: 'critical',
+      titleAr: 'انقطع الاتصال بالراوتر',
+      titleEn: 'Router Went Offline',
+      detailAr: `توقفت نبضات الوكيل السحابي من الراوتر ${routerName} لأكثر من 60 ثانية.`,
+      detailEn: `Cloud Agent heartbeat from ${routerName} stopped for over 60s.`,
+      timestamp: nowMs,
+    });
+  }
+
+  if (!telemetry || !isConnected) return alerts;
+
+  if (telemetry.pingMs === null) {
+    alerts.push({
+      id: 'wan_packet_loss',
+      severity: 'critical',
+      titleAr: 'فقدان حزم أو انقطاع الإنترنت (Ping Timeout)',
+      titleEn: 'Internet Packet Loss / Ping Timeout',
+      detailAr: `تعذر وصول الراوتر ${routerName} إلى 1.1.1.1 — تحقق من خط الإنترنت أو الـ WAN.`,
+      detailEn: `${routerName} failed to ping 1.1.1.1 — check WAN uplink.`,
+      timestamp: nowMs,
+    });
+  } else if (telemetry.pingMs > 150) {
+    alerts.push({
+      id: 'high_latency',
+      severity: 'warning',
+      titleAr: `ارتفاع زمن الاستجابة (${telemetry.pingMs} ms)`,
+      titleEn: `High Internet Latency (${telemetry.pingMs} ms)`,
+      detailAr: `تجاوز البنق الحد الموصى به (>150ms) على ${routerName}.`,
+      detailEn: `Latency exceeded 150ms threshold on ${routerName}.`,
+      timestamp: nowMs,
+    });
+  }
+
+  const downWan = telemetry.interfaces.filter(
+    (iface) =>
+      !iface.running &&
+      /^(ether1|wan|starlink|pppoe|lte|sfp)/i.test(iface.name)
+  );
+  if (downWan.length > 0) {
+    const names = downWan.map((i) => i.name).join(', ');
+    alerts.push({
+      id: `wan_down_${names}`,
+      severity: 'critical',
+      titleAr: `انقطاع منفذ الخط (${names})`,
+      titleEn: `WAN Line Down (${names})`,
+      detailAr: `الحالة غير متصلة (Not Running) للمنفذ: ${names}.`,
+      detailEn: `Interface link dropped on: ${names}.`,
+      timestamp: nowMs,
+    });
+  }
+
+  if (telemetry.cpu > 85) {
+    alerts.push({
+      id: 'high_cpu',
+      severity: 'critical',
+      titleAr: `ضغط معالج مرتفع (${telemetry.cpu}%)`,
+      titleEn: `High CPU Load (${telemetry.cpu}%)`,
+      detailAr: `تجاوز استهلاك المعالج 85% على ${routerName}.`,
+      detailEn: `CPU load exceeded 85% on ${routerName}.`,
+      timestamp: nowMs,
+    });
+  }
+
+  if (telemetry.temp !== null && telemetry.temp > 65) {
+    alerts.push({
+      id: 'high_temp',
+      severity: 'critical',
+      titleAr: `ارتفاع حرارة الراوتر (${telemetry.temp}°C)`,
+      titleEn: `High Router Temperature (${telemetry.temp}°C)`,
+      detailAr: `تجاوزت حرارة المعالج/اللوحة 65°C على ${routerName}.`,
+      detailEn: `Hardware temperature exceeded 65°C on ${routerName}.`,
+      timestamp: nowMs,
+    });
+  }
+
+  if (telemetry.volt !== null && telemetry.volt > 0 && telemetry.volt < lowVoltageThreshold) {
+    alerts.push({
+      id: 'low_battery_voltage',
+      severity: 'critical',
+      titleAr: `انخفاض جهد البطارية (${telemetry.volt}V)`,
+      titleEn: `Low Battery Voltage (${telemetry.volt}V)`,
+      detailAr: `هبط الجهد على ${routerName} دون الحد الآمن (${lowVoltageThreshold}V) — يُنصح بتشغيل حارس البطارية.`,
+      detailEn: `Voltage on ${routerName} dropped below ${lowVoltageThreshold}V threshold.`,
+      timestamp: nowMs,
+    });
+  }
+
+  return alerts;
 }
 
 export function getRouterCloudBase(tenantUuid: string, routerId: string): string {
@@ -249,10 +472,30 @@ export async function cloudFetchRouterTelemetry(
     if (!res.ok) {
       return { ok: false, telemetry: null, isFresh: false, error: `HTTP ${res.status}` };
     }
-    const raw = (await res.json()) as Partial<RouterCloudTelemetry> | null;
+    const raw = (await res.json()) as Record<string, unknown> | null;
     if (!raw || typeof raw !== 'object' || !raw.board) {
       return { ok: true, telemetry: null, isFresh: false };
     }
+
+    const rawSessions = Array.isArray(raw.active_sessions) ? raw.active_sessions : [];
+    const active_sessions: RouterActiveSession[] = rawSessions
+      .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === 'object'))
+      .map((s) => ({
+        user: String(s.user || ''),
+        type: s.type === 'pppoe' ? 'pppoe' : 'hotspot',
+        address: String(s.address || ''),
+        mac: String(s.mac || ''),
+        uptime: String(s.uptime || ''),
+      }));
+
+    const rawIfaces = Array.isArray(raw.interfaces) ? raw.interfaces : [];
+    const interfaces: RouterInterfaceStatus[] = rawIfaces
+      .filter((i): i is Record<string, unknown> => Boolean(i && typeof i === 'object'))
+      .map((i) => ({
+        name: String(i.name || ''),
+        running: Boolean(i.running),
+      }));
+
     const telemetry: RouterCloudTelemetry = {
       board: String(raw.board),
       version: String(raw.version || ''),
@@ -260,8 +503,15 @@ export async function cloudFetchRouterTelemetry(
       freeMem: Number(raw.freeMem) || 0,
       totalMem: Number(raw.totalMem) || 0,
       uptime: String(raw.uptime || '0s'),
+      temp: parseTelemetryNumber(raw.temp),
+      volt: parseTelemetryNumber(raw.volt),
+      rxBps: Math.max(0, parseTelemetryNumber(raw.rxBps) ?? 0),
+      txBps: Math.max(0, parseTelemetryNumber(raw.txBps) ?? 0),
+      pingMs: parseRouterOsPingMs(raw.pingMs),
+      interfaces,
       hotspot: Number(raw.hotspot) || 0,
       ppp: Number(raw.ppp) || 0,
+      active_sessions,
       timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : 0,
     };
     return {
@@ -274,6 +524,81 @@ export async function cloudFetchRouterTelemetry(
       ok: false,
       telemetry: null,
       isFresh: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function cloudFetchRouterInventory(
+  tenantUuid: string,
+  routerId: string
+): Promise<{ ok: boolean; inventory: RouterCloudInventory | null; error?: string }> {
+  try {
+    const res = await fetchWithTimeout(
+      `${getRouterCloudBase(tenantUuid, routerId)}/inventory.json`,
+      { method: 'GET', cache: 'no-store' }
+    );
+    if (!res.ok) {
+      return { ok: false, inventory: null, error: `HTTP ${res.status}` };
+    }
+    const raw = (await res.json()) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== 'object') {
+      return { ok: true, inventory: null };
+    }
+
+    const injected_accounts: RouterInjectedAccount[] = (
+      Array.isArray(raw.injected_accounts) ? raw.injected_accounts : []
+    )
+      .filter((a): a is Record<string, unknown> => Boolean(a && typeof a === 'object'))
+      .map((a) => ({
+        name: String(a.name || ''),
+        type: a.type === 'pppoe' ? 'pppoe' : 'hotspot',
+        profile: String(a.profile || 'default'),
+        disabled: Boolean(a.disabled),
+      }));
+
+    const dishes: RouterDishNeighbor[] = (Array.isArray(raw.dishes) ? raw.dishes : [])
+      .filter((d): d is Record<string, unknown> => Boolean(d && typeof d === 'object'))
+      .map((d) => ({
+        identity: String(d.identity || ''),
+        address: String(d.address || ''),
+        mac: String(d.mac || ''),
+        interface: String(d.interface || ''),
+        platform: String(d.platform || ''),
+      }));
+
+    const ip_table: RouterIpEntry[] = (Array.isArray(raw.ip_table) ? raw.ip_table : [])
+      .filter((ip): ip is Record<string, unknown> => Boolean(ip && typeof ip === 'object'))
+      .map((ip) => ({
+        address: String(ip.address || ''),
+        mac: String(ip.mac || ''),
+        hostName: String(ip.hostName || ''),
+        status: String(ip.status || ''),
+        source: ip.source ? String(ip.source) : undefined,
+      }));
+
+    const logs: RouterLogEntry[] = (Array.isArray(raw.logs) ? raw.logs : [])
+      .filter((l): l is Record<string, unknown> => Boolean(l && typeof l === 'object'))
+      .map((l) => ({
+        time: String(l.time || ''),
+        topics: String(l.topics || ''),
+        message: String(l.message || ''),
+      }));
+
+    return {
+      ok: true,
+      inventory: {
+        injected_accounts,
+        dishes,
+        ip_table,
+        logs,
+        timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      inventory: null,
       error: err instanceof Error ? err.message : 'Network error',
     };
   }
@@ -309,8 +634,8 @@ export async function cloudSendRouterCommand(
 export async function cloudWaitForCommandExecution(
   tenantUuid: string,
   routerId: string,
-  timeoutMs: number = 22_000,
-  pollIntervalMs: number = 2_000
+  timeoutMs: number = 16_000,
+  pollIntervalMs: number = 1_500
 ): Promise<{ executed: boolean; timedOut: boolean; error?: string }> {
   const startedAt = Date.now();
   const endpoint = `${getRouterCloudBase(tenantUuid, routerId)}/command.json`;
@@ -350,5 +675,104 @@ export async function cloudSendAndAwaitRouterCommand(
     timedOut: waitRes.timedOut,
     error: waitRes.error,
   };
+}
+
+export async function cloudRequestInventorySync(
+  tenantUuid: string,
+  routerId: string,
+  onQueued?: () => void
+): Promise<{
+  ok: boolean;
+  executed: boolean;
+  inventory: RouterCloudInventory | null;
+  error?: string;
+}> {
+  const cmdRes = await cloudSendAndAwaitRouterCommand(
+    tenantUuid,
+    routerId,
+    'SYNC_INVENTORY',
+    onQueued
+  );
+  if (!cmdRes.ok) {
+    return { ok: false, executed: false, inventory: null, error: cmdRes.error };
+  }
+  const invRes = await cloudFetchRouterInventory(tenantUuid, routerId);
+  return {
+    ok: invRes.ok,
+    executed: cmdRes.executed,
+    inventory: invRes.inventory,
+    error: invRes.error,
+  };
+}
+
+// === Global Owner Update Broadcast ===
+
+export async function cloudFetchSystemBroadcast(): Promise<{
+  ok: boolean;
+  broadcast: import('../types/mikrocore').SystemBroadcast | null;
+  error?: string;
+}> {
+  try {
+    const res = await fetchWithTimeout(`${FIREBASE_RTDB_URL}/system_broadcast.json`, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      return { ok: false, broadcast: null, error: `HTTP ${res.status}` };
+    }
+    const raw = (await res.json()) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== 'object' || !raw.id || !raw.message) {
+      return { ok: true, broadcast: null };
+    }
+    return {
+      ok: true,
+      broadcast: {
+        id: String(raw.id),
+        title: String(raw.title || ''),
+        message: String(raw.message || ''),
+        timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      broadcast: null,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function cloudPublishSystemBroadcast(
+  title: string,
+  message: string
+): Promise<{
+  ok: boolean;
+  broadcast?: import('../types/mikrocore').SystemBroadcast;
+  error?: string;
+}> {
+  const cleanTitle = sanitizeInput(title);
+  const cleanMessage = sanitizeInput(message);
+  if (!cleanTitle || !cleanMessage) {
+    return { ok: false, error: 'Title and message are required' };
+  }
+  const broadcast: import('../types/mikrocore').SystemBroadcast = {
+    id: generateUUID(),
+    title: cleanTitle,
+    message: cleanMessage,
+    timestamp: Date.now(),
+  };
+  try {
+    const res = await fetchWithTimeout(`${FIREBASE_RTDB_URL}/system_broadcast.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(broadcast),
+    });
+    return res.ok ? { ok: true, broadcast } : { ok: false, error: `HTTP ${res.status}` };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
 }
 

@@ -58,6 +58,26 @@ test('ismaeil AI returns relevant bilingual guidance and module links across all
 
   const enFinance = queryIsmaeilAi('How do reseller debt limits and SYP/TRY work?', 'en');
   assert.equal(enFinance.suggestedModule, 'finance');
+
+  const liveAware = queryIsmaeilAi('حل بطء الألعاب على ستارلينك', 'ar', {
+    routerName: 'Main-RB5009',
+    routerId: 'r1',
+    osVersion: 'v7',
+    board: 'RB5009UG+S+IN',
+    cpu: 42,
+    pingMs: 31,
+    activeHotspot: 24,
+    activePppoe: 8,
+    interfaces: [
+      { name: 'ether1-Starlink', running: true },
+      { name: 'bridge-Clients', running: true },
+    ],
+  });
+  assert.equal(liveAware.text.includes('Main-RB5009'), true);
+  assert.equal(liveAware.text.includes('42%'), true);
+  assert.ok(liveAware.executableScript);
+  assert.equal(liveAware.executableScript.includes('out-interface="ether1-Starlink"'), true);
+  assert.equal(liveAware.executableScript.includes('parent="bridge-Clients"'), true);
 });
 
 test('Sandbox Simulator validates RouterOS v6/v7 and Cisco IOS syntax and mutates virtual state', () => {

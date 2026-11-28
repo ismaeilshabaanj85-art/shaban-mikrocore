@@ -4,6 +4,7 @@ import {
   Copy,
   Download,
   Gamepad2,
+  Gauge,
   Network,
   Plus,
   RotateCcw,
@@ -24,10 +25,12 @@ import {
 import {
   SafeFamilyConfig,
   generateAntiNetcutSecurityShield,
+  generateCarrierCakeFqCodelScript,
   generateMultiWanPcc,
   generateSafeFamilyRollbackScript,
   generateSafeFamilyShieldScript,
   generateStarlinkGamingOptimizer,
+  generateVrrpFailoverScript,
 } from '../../engine/networkEngine';
 import { generateUUID } from '../../utils/security';
 import { CodeTerminalBox } from '../CodeTerminalBox';
@@ -36,6 +39,7 @@ interface PccStarlinkSecurityModuleProps {
   lang: Language;
   mode: AppMode;
   activeRouter: RouterProfile;
+  tenantUuid?: string;
   onSaveToVault: (name: string, content: string, type: 'rsc' | 'backup') => void;
 }
 
@@ -43,11 +47,31 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
   lang,
   mode,
   activeRouter,
+  tenantUuid,
   onSaveToVault,
 }) => {
-  const [subTab, setSubTab] = useState<'pcc' | 'starlink' | 'shield' | 'safe_family'>('pcc');
+  const [subTab, setSubTab] = useState<'pcc' | 'starlink' | 'shield' | 'safe_family' | 'carrier_ha'>('pcc');
   const [osVersion, setOsVersion] = useState<RouterOSVersion>(activeRouter.osVersion);
   const [copiedRollback, setCopiedRollback] = useState(false);
+
+  // Carrier-Grade CAKE / FQ-Codel & VRRP HA State
+  const [carrierQos, setCarrierQos] = useState({
+    wanInterface: 'ether1',
+    lanInterface: 'bridge-LAN',
+    downMbps: 250,
+    upMbps: 40,
+    queueKind: 'cake' as 'cake' | 'fq_codel',
+  });
+  const [vrrpCfg, setVrrpCfg] = useState({
+    role: 'master' as 'master' | 'backup',
+    interfaceName: 'bridge-LAN',
+    vrid: 50,
+    virtualIp: '192.168.88.1/32',
+    interfaceIp: '192.168.88.2/24',
+    priority: 200,
+    authPassword: '',
+    preemptMode: true,
+  });
 
   const [safeFamily, setSafeFamily] = useState<SafeFamilyConfig>({
     osVersion: activeRouter.osVersion,
@@ -128,6 +152,8 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
   const shieldScript = generateAntiNetcutSecurityShield({ ...shield, osVersion });
   const safeFamilyScript = generateSafeFamilyShieldScript({ ...safeFamily, osVersion });
   const safeFamilyRollbackScript = generateSafeFamilyRollbackScript(osVersion);
+  const carrierCakeScript = generateCarrierCakeFqCodelScript({ ...carrierQos, osVersion });
+  const vrrpScript = generateVrrpFailoverScript({ ...vrrpCfg, osVersion });
 
   const copyRollback = async () => {
     try {
@@ -240,6 +266,20 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
             {lang === 'ar'
               ? 'درع حظر المواقع الإباحية (Safe Family)'
               : 'Safe Family & Anti-Porn Shield'}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('carrier_ha')}
+          className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold cursor-pointer ${
+            subTab === 'carrier_ha'
+              ? 'border-cyan-400 bg-cyan-500/20 text-white'
+              : 'border-slate-800 bg-[#0B142B]/80 text-slate-300'
+          }`}
+        >
+          <Gauge className="h-4 w-4 text-cyan-300" />
+          <span>
+            {lang === 'ar' ? 'جودة CAKE / FQ-Codel و VRRP' : 'Carrier QoS & VRRP HA'}
           </span>
         </button>
       </div>
@@ -380,6 +420,7 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
             lang={lang}
             mode={mode}
             activeRouter={{ ...activeRouter, osVersion }}
+            tenantUuid={tenantUuid}
             onSaveToVault={onSaveToVault}
           />
         </div>
@@ -493,6 +534,7 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
             lang={lang}
             mode={mode}
             activeRouter={{ ...activeRouter, osVersion }}
+            tenantUuid={tenantUuid}
             onSaveToVault={onSaveToVault}
           />
         </div>
@@ -608,6 +650,7 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
             lang={lang}
             mode={mode}
             activeRouter={{ ...activeRouter, osVersion }}
+            tenantUuid={tenantUuid}
             onSaveToVault={onSaveToVault}
           />
         </div>
@@ -728,6 +771,7 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
                 lang={lang}
                 mode={mode}
                 activeRouter={{ ...activeRouter, osVersion }}
+                tenantUuid={tenantUuid}
                 onSaveToVault={onSaveToVault}
               />
             </div>
@@ -792,6 +836,216 @@ export const PccStarlinkSecurityModule: React.FC<PccStarlinkSecurityModuleProps>
               </pre>
             </div>
           </div>
+        </div>
+      )}
+
+      {subTab === 'carrier_ha' && (
+        <div className="space-y-6">
+          {/* CAKE / FQ-Codel Anti-Bufferbloat QoS */}
+          <div className="noc-glass rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-cyan-300 flex items-center gap-2">
+                  <Gauge className="h-4 w-4" />
+                  <span>
+                    {lang === 'ar'
+                      ? 'هندسة جودة CAKE و FQ-Codel لمنع Bufferbloat (Carrier-Grade QoS)'
+                      : 'Carrier-Grade CAKE & FQ-Codel Anti-Bufferbloat QoS'}
+                  </span>
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? 'يقضي على ارتفاع البينغ أثناء الضغط الكامل على الخط عبر طوابير CAKE / FQ-Codel في RouterOS v7 (أو SFQ/PCQ في v6).'
+                    : 'Eliminates latency spikes under full link saturation with CAKE or FQ-Codel (v7) / SFQ-PCQ (v6).'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {(['cake', 'fq_codel'] as const).map((qk) => (
+                  <button
+                    key={qk}
+                    type="button"
+                    onClick={() => setCarrierQos({ ...carrierQos, queueKind: qk })}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-bold uppercase cursor-pointer ${
+                      carrierQos.queueKind === qk
+                        ? 'border-cyan-400 bg-cyan-500/20 text-cyan-200'
+                        : 'border-slate-700 bg-[#050A18] text-slate-400'
+                    }`}
+                  >
+                    {qk === 'cake' ? 'CAKE' : 'FQ-Codel'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">WAN Interface</label>
+                <input
+                  type="text"
+                  value={carrierQos.wanInterface}
+                  onChange={(e) => setCarrierQos({ ...carrierQos, wanInterface: e.target.value })}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">LAN Interface</label>
+                <input
+                  type="text"
+                  value={carrierQos.lanInterface}
+                  onChange={(e) => setCarrierQos({ ...carrierQos, lanInterface: e.target.value })}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Download (Mbps)</label>
+                <input
+                  type="number"
+                  min={5}
+                  value={carrierQos.downMbps}
+                  onChange={(e) => setCarrierQos({ ...carrierQos, downMbps: Number(e.target.value) || 10 })}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-cyan-300 tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Upload (Mbps)</label>
+                <input
+                  type="number"
+                  min={2}
+                  value={carrierQos.upMbps}
+                  onChange={(e) => setCarrierQos({ ...carrierQos, upMbps: Number(e.target.value) || 5 })}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-emerald-300 tabular-nums"
+                />
+              </div>
+            </div>
+          </div>
+
+          <CodeTerminalBox
+            title={
+              lang === 'ar'
+                ? `سكربت جودة ${carrierQos.queueKind.toUpperCase()} (${osVersion.toUpperCase()})`
+                : `Carrier-Grade ${carrierQos.queueKind.toUpperCase()} QoS (${osVersion.toUpperCase()})`
+            }
+            code={carrierCakeScript}
+            filename={`Carrier_QoS_${carrierQos.queueKind}_${osVersion}.rsc`}
+            lang={lang}
+            mode={mode}
+            activeRouter={{ ...activeRouter, osVersion }}
+            tenantUuid={tenantUuid}
+            onSaveToVault={onSaveToVault}
+          />
+
+          {/* VRRP High-Availability Failover */}
+          <div className="noc-glass rounded-2xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-emerald-300">
+                  {lang === 'ar'
+                    ? 'بروتوكول التوافر العالي VRRP High-Availability Failover'
+                    : 'VRRP High-Availability Router Failover'}
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {lang === 'ar'
+                    ? 'ربط راوتر رئيسي (Master) وراوتر احتياطي (Backup) بنفس بوابة Gateway الافتراضية دون انقطاع المشتركين.'
+                    : 'Active/Standby gateway redundancy sharing one Virtual IP across Master and Backup MikroTik routers.'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {(['master', 'backup'] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() =>
+                      setVrrpCfg({
+                        ...vrrpCfg,
+                        role: r,
+                        priority: r === 'master' ? 200 : 100,
+                        interfaceIp: r === 'master' ? '192.168.88.2/24' : '192.168.88.3/24',
+                      })
+                    }
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-bold uppercase cursor-pointer ${
+                      vrrpCfg.role === r
+                        ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+                        : 'border-slate-700 bg-[#050A18] text-slate-400'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Interface</label>
+                <input
+                  type="text"
+                  value={vrrpCfg.interfaceName}
+                  onChange={(e) => setVrrpCfg({ ...vrrpCfg, interfaceName: e.target.value })}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">VRID (1-255)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={255}
+                  value={vrrpCfg.vrid}
+                  onChange={(e) => setVrrpCfg({ ...vrrpCfg, vrid: Number(e.target.value) || 50 })}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-cyan-300 tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Virtual IP (VIP)</label>
+                <input
+                  type="text"
+                  value={vrrpCfg.virtualIp}
+                  onChange={(e) => setVrrpCfg({ ...vrrpCfg, virtualIp: e.target.value })}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Node Physical IP</label>
+                <input
+                  type="text"
+                  value={vrrpCfg.interfaceIp}
+                  onChange={(e) => setVrrpCfg({ ...vrrpCfg, interfaceIp: e.target.value })}
+                  dir="ltr"
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-slate-400">Priority</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={254}
+                  value={vrrpCfg.priority}
+                  onChange={(e) => setVrrpCfg({ ...vrrpCfg, priority: Number(e.target.value) || 100 })}
+                  className="w-full rounded-xl border border-slate-700 bg-[#050A18] px-3 py-2 font-mono text-xs text-emerald-300 tabular-nums"
+                />
+              </div>
+            </div>
+          </div>
+
+          <CodeTerminalBox
+            title={
+              lang === 'ar'
+                ? `سكربت VRRP HA (${vrrpCfg.role.toUpperCase()} · ${osVersion.toUpperCase()})`
+                : `VRRP Failover Script (${vrrpCfg.role.toUpperCase()} · ${osVersion.toUpperCase()})`
+            }
+            code={vrrpScript}
+            filename={`VRRP_${vrrpCfg.role}_${osVersion}.rsc`}
+            lang={lang}
+            mode={mode}
+            activeRouter={{ ...activeRouter, osVersion }}
+            tenantUuid={tenantUuid}
+            onSaveToVault={onSaveToVault}
+          />
         </div>
       )}
     </div>

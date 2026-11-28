@@ -7,6 +7,7 @@ import {
   ExchangeRates,
   FinanceTransaction,
   GeneratedVoucher,
+  PppoeSubscriber,
   ResellerAccount,
   RouterProfile,
   SessionUser,
@@ -550,21 +551,65 @@ export function saveTenantCpes(tenantUuid: string, list: CpeDevice[]): void {
 }
 
 export function loadTenantTelegram(tenantUuid: string): TelegramBotConfig {
-  return safeParse<TelegramBotConfig>(
+  const loaded = safeParse<Partial<TelegramBotConfig>>(
     localStorage.getItem(getTenantStorageKey(tenantUuid, 'telegram')),
-    {
-      enabled: true,
-      botToken: '',
-      adminChatId: '',
-      notifyTowerDown: true,
-      notifyDailyBackup: true,
-      enableResellerVending: true,
-    }
+    {}
   );
+  return {
+    enabled: loaded.enabled ?? true,
+    botToken: loaded.botToken || '',
+    adminChatId: loaded.adminChatId || '',
+    notifyTowerDown: loaded.notifyTowerDown ?? true,
+    notifyDailyBackup: loaded.notifyDailyBackup ?? true,
+    enableResellerVending: loaded.enableResellerVending ?? true,
+    enableBatteryGuard: loaded.enableBatteryGuard ?? true,
+    lowVoltageThreshold:
+      typeof loaded.lowVoltageThreshold === 'number' && loaded.lowVoltageThreshold > 0
+        ? loaded.lowVoltageThreshold
+        : 22.5,
+    secondaryPortsToShutdown: loaded.secondaryPortsToShutdown || 'ether4,ether5',
+  };
 }
 
 export function saveTenantTelegram(tenantUuid: string, cfg: TelegramBotConfig): void {
   localStorage.setItem(getTenantStorageKey(tenantUuid, 'telegram'), JSON.stringify(cfg));
+}
+
+export function loadTenantSubscribers(tenantUuid: string): PppoeSubscriber[] {
+  const key = getTenantStorageKey(tenantUuid, 'pppoe_subscribers');
+  const existing = safeParse<PppoeSubscriber[]>(localStorage.getItem(key), []);
+  if (existing.length > 0) return existing;
+  const now = new Date();
+  const in3Days = new Date(now.getTime() + 3 * 86400000).toISOString().slice(0, 10);
+  const in20Days = new Date(now.getTime() + 20 * 86400000).toISOString().slice(0, 10);
+  const seed: PppoeSubscriber[] = [
+    {
+      id: 'sub_1',
+      clientName: 'أحمد العلي',
+      pppoeUsername: 'ppp_ahmad',
+      phone: '963944123456',
+      monthlyFeeUsd: 12,
+      expiryDate: in3Days,
+      speedLabel: '8M / 4M',
+      createdAt: now.toISOString(),
+    },
+    {
+      id: 'sub_2',
+      clientName: 'منزل أبو خالد',
+      pppoeUsername: 'ppp_khaled',
+      phone: '963933654321',
+      monthlyFeeUsd: 18,
+      expiryDate: in20Days,
+      speedLabel: '16M / 8M',
+      createdAt: now.toISOString(),
+    },
+  ];
+  localStorage.setItem(key, JSON.stringify(seed));
+  return seed;
+}
+
+export function saveTenantSubscribers(tenantUuid: string, list: PppoeSubscriber[]): void {
+  localStorage.setItem(getTenantStorageKey(tenantUuid, 'pppoe_subscribers'), JSON.stringify(list));
 }
 
 export function exportTenantDatabaseJson(tenantUuid: string): string {
@@ -579,6 +624,7 @@ export function exportTenantDatabaseJson(tenantUuid: string): string {
       vouchers: loadTenantVouchers(tenantUuid),
       portal: loadTenantPortal(tenantUuid),
       resellers: loadTenantResellers(tenantUuid),
+      subscribers: loadTenantSubscribers(tenantUuid),
       transactions: loadTenantTransactions(tenantUuid),
       rates: loadTenantRates(tenantUuid),
       towers: loadTenantTowers(tenantUuid),
@@ -609,6 +655,8 @@ export function importTenantDatabaseJson(
       saveTenantPortal(tenantUuid, parsed.portal as CaptivePortalConfig);
     if (Array.isArray(parsed.resellers))
       saveTenantResellers(tenantUuid, parsed.resellers as ResellerAccount[]);
+    if (Array.isArray(parsed.subscribers))
+      saveTenantSubscribers(tenantUuid, parsed.subscribers as PppoeSubscriber[]);
     if (Array.isArray(parsed.transactions))
       saveTenantTransactions(tenantUuid, parsed.transactions as FinanceTransaction[]);
     if (parsed.rates && typeof parsed.rates === 'object')
