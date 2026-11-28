@@ -83,10 +83,15 @@ test('One-Line Connector emits universal v6 & v7 MikroCore_CloudAgent script wit
     port: 8728,
   });
 
+  const lines = v7Conn.split('\n');
+  assert.equal(lines.length > 20, true);
   assert.equal(
-    v7Conn.startsWith(':do { /system scheduler remove [find name="MikroCore_CloudAgent"] } on-error={};'),
-    true
+    lines[0],
+    ':do { /system scheduler remove [find name="MikroCore_CloudAgent"] } on-error={}'
   );
+  for (const line of lines) {
+    assert.equal(line.length < 1000, true, `Line exceeded 1000 chars: ${line.length}`);
+  }
   assert.equal(v7Conn, v6Conn);
   assert.equal(v7Conn.includes('interval=8s'), true);
   assert.equal(v7Conn.includes('/routers/tenant-123/router_alpha/telemetry.json'), true);
